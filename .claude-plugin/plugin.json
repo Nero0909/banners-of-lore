@@ -1,0 +1,12 @@
+{
+  "name": "banners-of-lore",
+  "displayName": "Banners of Lore",
+  "version": "0.1.0",
+  "description": "An autobattler above the prompt: Slavs against orcs, and Claude's work deals the event cards",
+  "author": {
+    "name": "Nero0909"
+  },
+  "homepage": "https://github.com/Nero0909/banners-of-lore",
+  "repository": "https://github.com/Nero0909/banners-of-lore",
+  "types": "./types/index.d.ts"
+}

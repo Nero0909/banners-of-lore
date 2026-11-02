@@ -1,0 +1,6 @@
+{
+  "name": "banners-of-lore",
+  "description": "Banners of Lore, an autobattler above the Claude prompt",
+  "owner": { "name": "Banners of Lore" },
+  "plugins": [{ "name": "banners-of-lore", "source": "./" }]
+}
