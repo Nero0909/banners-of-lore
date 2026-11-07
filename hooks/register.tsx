@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, Timer } from 'claude-code'
 
-import type { Answer, Art, Base, Bay, Choice, CornerProps, DraftProps, Flash, HireProps, Picture, Row, Stored, TitleProps, View, Work } from '../types'
+import type { Answer, Art, Base, Bay, BoardProps, Choice, CornerProps, DraftProps, Flash, HireProps, Picture, Row, Stored, TitleProps, Tone, View, Work } from '../types'
 
 // The band above the prompt while Claude works. The game itself is a binary of its
 // own, a process a request: this holds the Buttons, the clock and the pictures the
@@ -9,6 +9,12 @@ import type { Answer, Art, Base, Bay, Choice, CornerProps, DraftProps, Flash, Hi
 
 const COMMAND = 'banners-of-lore'
 const STORE_KEY = 'army'
+// Whether this player has had the lesson: one key for all sessions, so a new session
+// does not teach again, and not under STORE_KEY, whose old games forget() clears.
+const LESSON_KEY = 'lesson'
+// The store holds 4 MiB in all and a game some 20 KB: past this many sessions, the
+// games of those seen longest ago go.
+const KEEP_GAMES = 20
 const STEP_MS = 100
 const ROWS = 9
 // Both layers of the desktop field at one size, in CSS pixels: an image and an
@@ -25,8 +31,16 @@ const BAR_LIFT = -0.5
 const PLATE_ART = 'data:image/webp;base64,UklGRsYAAABXRUJQVlA4TLoAAAAvMwADAHegqJEk5beMh/6FnLXToaaRFEjA3fFUlNDjGm/4UNBIUvO9P/5VIgHmP7pOngeCeDMSASB0REbEkQWrMP/T3u9meXfBTW3bToQFjCCBjpYKREQBIAEFoc5XAiVdDhOqcTM/rIuDiP4rcNtGSY4ZfrFJYtkA5EU5q6dQrUrFQXcK869BKPoAgEH0Bd90YRB92W1vDKJvTn5UIvqq2qUQfflkUYi+YcDIIPo833cYRN+Tt3/wXwA='
 const PLATE_PX = { width: 78, height: 19.5, gap: 3 }
 const PLATE_COLUMNS = 10
-// The row over the field: it holds, then fades away, with Restart and Hide past its end.
-const FLASH = { width: 600, height: 22, holdMs: 3000, fadeMs: 2000 }
+// The row over the field: words at its left end with what happened last, and Restart
+// and Hide at the right. What Claude did holds, then fades away. The words stand bare:
+// the user took their wooden frame away (2026-11-06).
+const FLASH = { holdMs: 3000, fadeMs: 2000 }
+// The words take as much as the longest news, less on a band too narrow for it.
+const BOARD_PX = 330
+// The words on the board in one style, the status line's: capitals, units small after
+// a number. Coloured as the status line's column of what they touch: gold, the army,
+// mana, kin, the orcs, the totem. The board mixed cases and wore one gold (2026-11-06).
+const BOARD_INK: Record<Tone, string> = { gold: '#F4BD60', army: '#FFF0CE', mana: '#8FD3FF', kin: '#FFD27A', orcs: '#FF9A7A', totem: '#B79BFF' }
 // A new picture blinks while it loads. The one before stays on for COVER_MS, running
 // on past its end, so it moves on in step with the new one: no longer, as each keeps
 // its own clock from the moment it loaded. Only while the band stays under
@@ -57,6 +71,16 @@ const isFolded = atom({ plugin: 'banners-of-lore', key: 'isFolded' } as const, f
 // What the row over the field says for a moment after Claude's work pays, fixed as
 // it lights: a payday in the meantime must not start its fade again.
 const flash = atom({ plugin: 'banners-of-lore', key: 'flash' } as const, { said: '', threat: '' } as Flash, { shape: SHAPE })
+// What the battle's news says now, at the right end of the row over the field: on the
+// field it sat on a castle's bar (2026-11-06). The scene's rows bring it on time.
+const news = atom({ plugin: 'banners-of-lore', key: 'news' } as const, '')
+const newsTone = atom({ plugin: 'banners-of-lore', key: 'newsTone' } as const, 'army' as Tone)
+// The fog over the field while the match opens: a plain picture, up at once whatever
+// scene loads under it, which only lifts (2026-11-06).
+const fog = atom({ plugin: 'banners-of-lore', key: 'fog' } as const, '')
+// The scholar cat and his words over the field in the lesson: a plain picture a step,
+// which the scene's rows put up and take down on time.
+const cat = atom({ plugin: 'banners-of-lore', key: 'cat' } as const, '')
 // Why the band has no game to show, when the binary did not answer.
 const failure = atom({ plugin: 'banners-of-lore', key: 'failure' } as const, '')
 // The game as the binary last left it, at the running scene's start.
@@ -75,6 +99,10 @@ let timer: Timer | null = null
 let rowTimers: Timer[] = []
 let beat: Timer | null = null
 let unlit: Timer | null = null
+// Whether the battle's news came after what Claude did last.
+let isNewsLast = false
+// How many times the row has lit: the same words lit again fade again.
+let litCount = 0
 let isNudged = false
 let isRunning = false
 let isShown = false
@@ -83,6 +111,14 @@ let isTurnOver = false
 let art: Art | null = null
 let bar = ''
 let binary = ''
+let matches = ''
+// A build run from the dev folder says so in the corner: the release ships no sim/
+// (release.sh), so the stand's sources mark the dev build. The user took one for the
+// other (2026-11-03).
+let isDev = false
+// The first start of a player who never had the lesson and has no game saved goes to it.
+let isLessonDue = false
+const DEV_COLUMNS = 4
 const pictures = new Map<number, Picture>()
 let queue: Promise<void> = Promise.resolve()
 
@@ -97,15 +133,41 @@ function serial($: EngineInterface, work: () => Promise<void>): Promise<void> {
   return run
 }
 
-// The binary for this machine. A mod carries one for each it runs on.
+// The binary for this machine. A mod carries one for each it runs on: darwin-arm64 and
+// windows-x86_64.exe, which Windows on ARM runs too. Windows is told by OS=Windows_NT,
+// not by uname: Git Bash puts a uname there that answers MINGW64_NT-10.0 x86_64.
 async function binaryFor($: EngineInterface): Promise<string> {
   if (!binary) {
-    const { stdout } = await $.process.run(['uname', '-sm']).catch(() => ({ stdout: 'windows x86_64' }))
-    const [system = '', machine = ''] = stdout.trim().toLowerCase().split(/\s+/)
-    binary = `${$.plugin.root}/core/banners-of-lore-core-${system}-${machine}`
+    const os = await $.env.get('OS').catch(() => undefined)
+    const { stdout } = os === 'Windows_NT' ? { stdout: '' } : await $.process.run(['uname', '-sm']).catch(() => ({ stdout: '' }))
+    binary = `${$.plugin.root}/core/${coreName(os, stdout)}`
   }
 
   return binary
+}
+
+// The core's file name from the OS variable and what `uname -sm` answered.
+export function coreName(os: string | undefined, uname: string): string {
+  const [system = '', machine = ''] = uname.trim().toLowerCase().split(/\s+/)
+  const isWindows = os === 'Windows_NT' || /^(mingw|msys|cygwin|windows)/.test(system)
+
+  return `banners-of-lore-core-${isWindows ? 'windows-x86_64.exe' : `${system}-${machine}`}`
+}
+
+// Where matches are kept: ~/.claude/banners-of-lore/matches, whether the mod runs from
+// the plugin cache or straight from the dev folder, so the reviews find every one.
+async function matchesDir($: EngineInterface): Promise<string> {
+  if (!matches) {
+    // Windows keeps the home in USERPROFILE, as C:\Users\<name>; a printenv from Git Bash
+    // would answer /c/Users/<name>, which Windows itself does not read.
+    const isWindows = (await $.env.get('OS').catch(() => undefined)) === 'Windows_NT'
+    const home = isWindows
+      ? ((await $.env.get('USERPROFILE').catch(() => undefined)) ?? '').replace(/\\/g, '/')
+      : (await $.process.run(['printenv', 'HOME']).catch(() => ({ stdout: '' }))).stdout.trim()
+    matches = /^(\/|[A-Za-z]:\/)/.test(home) ? `${home}/.claude/banners-of-lore/matches` : `${$.plugin.root}/matches`
+  }
+
+  return matches
 }
 
 // One request to the game. elapsed is how far the running scene has come.
@@ -121,9 +183,31 @@ async function ask($: EngineInterface, op: string, arg = ''): Promise<Answer & P
   return JSON.parse(stdout) as Answer & Partial<Art>
 }
 
+// Each session keeps its game under a key of its own, and STORE_KEY the last game played
+// anywhere, which a session with none takes up. One key for all handed every new or
+// reloaded session whatever game was saved last (2026-11-03).
+async function keyOf($: EngineInterface): Promise<string> {
+  const id = await $.session.id().catch(() => '')
+  return id ? `${STORE_KEY}:${id}` : STORE_KEY
+}
+
 async function persist($: EngineInterface): Promise<void> {
-  const value: Stored = { state: await read($, state), work: await read($, progress) }
-  await $.store.set(STORE_KEY, value)
+  const own = await keyOf($)
+  const value: Stored = { state: await read($, state), work: await read($, progress), at: await $.clock.now() }
+  const was = (await $.store.get(own)) as Partial<Stored> | undefined
+  await $.store.set(own, value)
+  // A session that only shows its own game again leaves the last one played be.
+  if (was?.state !== value.state) {
+    await $.store.set(STORE_KEY, value)
+  }
+}
+
+async function forget($: EngineInterface, own: string): Promise<void> {
+  const others = (await $.store.keys()).filter(key => key.startsWith(`${STORE_KEY}:`) && key !== own)
+  const seen = await Promise.all(others.map(async key => ({ key, at: ((await $.store.get(key)) as Partial<Stored> | undefined)?.at ?? 0 })))
+  for (const { key } of seen.sort((a, b) => b.at - a.at).slice(KEEP_GAMES)) {
+    await $.store.delete(key)
+  }
 }
 
 function clearTimers(): void {
@@ -150,13 +234,14 @@ const sizeOf = (layers: readonly string[]) => layers.reduce((n, l) => n + l.leng
 
 // Puts an answer on the band. A scene runs by itself to its end, with the Buttons
 // it changed along the way; the old picture covers the new one while that loads.
-// A match kept for reading later, one file each. Nothing sends it anywhere.
+// A match kept for reading later, one file each. Nothing sends it anywhere. Every
+// session and every build keeps its matches in one folder, so each says whose it is.
 async function keepMatch($: EngineInterface, record: object): Promise<void> {
-  const home = $.plugin.root.indexOf('/.claude/')
-  const dir = home < 0 ? `${$.plugin.root}/matches` : `${$.plugin.root.slice(0, home)}/.claude/banners-of-lore/matches`
+  const dir = await matchesDir($)
   const at = new Date(await $.clock.now()).toISOString()
+  const session = await $.session.id().catch(() => '')
   // A match not kept must not stop the game.
-  await $.fs.write(`${dir}/${at.replaceAll(':', '-')}.json`, JSON.stringify({ at, ...record })).catch(() => undefined)
+  await $.fs.write(`${dir}/${at.replaceAll(':', '-')}.json`, JSON.stringify({ at, session, build: $.plugin.root, ...record })).catch(() => undefined)
 }
 
 async function show($: EngineInterface, a: Answer): Promise<void> {
@@ -202,7 +287,8 @@ async function show($: EngineInterface, a: Answer): Promise<void> {
   const isOnScreen = a.screen === 'battle' && was.screen === 'battle' && !(await read($, isFolded))
   // A still frame keeps step with nothing: it would stand as a second army.
   const isMoving = was.steps > 0 && steps > 0
-  const covering = isOnScreen && isMoving && sizeOf(pictures.get(was.id)?.layers ?? []) + sizeOf(layers) + (art?.backdrop.length ?? 0) + bar.length < COVERED_TREE ? was.id : 0
+  // The core says when the scene before must not lie over this one: the lesson's opening.
+  const covering = a.cover !== false && isOnScreen && isMoving && sizeOf(pictures.get(was.id)?.layers ?? []) + sizeOf(layers) + (art?.backdrop.length ?? 0) + bar.length < COVERED_TREE ? was.id : 0
   await update($, cover, () => covering)
   if (covering) {
     $.clock.after(COVER_MS, () => void update($, cover, c => (c === covering ? 0 : c)))
@@ -215,11 +301,30 @@ async function show($: EngineInterface, a: Answer): Promise<void> {
   }
   await update($, state, () => a.state ?? '')
   await update($, buttons, () => a.rows?.[0]?.buttons ?? { hire: [], forms: [] })
+  await tell($, a.rows?.[0]?.news ?? '', a.rows?.[0]?.tone)
+  await update($, fog, () => a.fog ?? '')
+  const catOf = (step: number | undefined) => (step ? (a.cats?.[String(step)] ?? '') : '')
+  await update($, cat, () => catOf(a.rows?.[0]?.cat))
+  // The lesson begun: it is not offered again.
+  if (isLessonDue && a.rows?.[0]?.cat !== undefined) {
+    isLessonDue = false
+    await $.store.set(LESSON_KEY, true)
+  }
+  if (a.fogGone !== null && a.fogGone !== undefined) {
+    const gone = a.fog
+    rowTimers.push($.clock.after(a.fogGone * STEP_MS, () => void update($, fog, f => (f === gone ? '' : f))))
+  }
   // Before the view: a drawing that finds it stopped asks for it again.
   isRunning = next.roll > 0 || (a.screen === 'battle' && steps > 0)
   await update($, view, () => next)
   for (const row of a.rows?.slice(1) ?? []) {
-    rowTimers.push($.clock.after(lead + row.at * STEP_MS, () => void update($, buttons, () => row.buttons)))
+    rowTimers.push(
+      $.clock.after(lead + row.at * STEP_MS, async () => {
+        await update($, buttons, () => row.buttons)
+        await tell($, row.news ?? '', row.tone)
+        await update($, cat, () => catOf(row.cat))
+      }),
+    )
   }
   if (a.fellAt !== null && a.fellAt !== undefined) {
     rowTimers.push($.clock.after(lead + a.fellAt * STEP_MS + FALL_MS, () => void act($, 'fall')))
@@ -300,38 +405,37 @@ export function linesOf(output: unknown): number[] {
 // What the row says of a number of tokens.
 const tokensOf = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k` : String(n))
 const toolOf = (tool: string) => tool.split('__').at(-1) ?? tool
-const FADE = { total: FLASH.holdMs + FLASH.fadeMs, hold: Math.round((FLASH.holdMs / (FLASH.holdMs + FLASH.fadeMs)) * 100) / 100 }
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const FADE_MS = FLASH.holdMs + FLASH.fadeMs
 
-// A Text cannot fade, and stepping its colour would draw the whole band again each
-// step; this fades by itself.
-function flashSvg(said: string, threat: string): string {
-  const width = FLASH.width
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${FLASH.height}" font-family="${FONT}" font-size="14" font-weight="700">` +
-    `<g><animate attributeName="opacity" values="1;1;0" keyTimes="0;${FADE.hold};1" dur="${FADE.total / 1000}s" fill="freeze"/>` +
-    `<text x="2" y="16" fill="#F4BD60">${esc(said)}</text>` +
-    `<text x="${width - 2}" y="16" text-anchor="end" fill="#FF8A7A">${esc(threat)}</text></g></svg>`
-  )
-}
 
-// Lights the row with what Claude just did and what that paid, and what it has set
-// the orcs up with: a dim line that stayed was not seen, and a sum with no cause
-// said nothing (seen 2026-10-31).
 // What the row says of a model request.
 export function spentRow(tokens: number, mana: number): string {
-  return `${tokensOf(tokens)} tokens spent: +${Math.round(mana * 10) / 10} mana`
+  return `${tokensOf(tokens)} TOKENS SPENT: +${Math.round(mana * 10) / 10} MANA`
 }
 
-async function light($: EngineInterface, why: string): Promise<void> {
+// Lights the row with what Claude just did and what that paid: a dim line that
+// stayed was not seen, and a sum with no cause said nothing (seen 2026-10-31). What
+// it set the orcs up with is said when it grows, not again at every payday.
+async function light($: EngineInterface, why: string, grew: 'fury' | 'totem' | '' = ''): Promise<void> {
   const base = (await read($, view)).base
   const w = await read($, progress)
-  const fury = base.fury + w.errors - base.usedErrors
-  const totems = base.totems + w.compactions - base.usedCompactions
-  const threat = [...(fury > 0 ? [`orcs enraged x${fury}`] : []), ...(totems > 0 ? [`orc totem x${totems}`] : [])].join(' · ')
+  const threat =
+    grew === 'fury' ? `ORCS ENRAGED x${base.fury + w.errors - base.usedErrors}` : grew === 'totem' ? `ORC TOTEM x${base.totems + w.compactions - base.usedCompactions}` : ''
+  isNewsLast = false
+  litCount += 1
   unlit?.cancel()
   await update($, flash, () => ({ said: why, threat }))
-  unlit = $.clock.after(FADE.total, () => void update($, flash, () => ({ said: '', threat: '' })))
+  unlit = $.clock.after(FADE_MS, () => void update($, flash, () => ({ said: '', threat: '' })))
+}
+
+// The battle's news, and whether it came after what Claude did: the board says the
+// latest of the two.
+async function tell($: EngineInterface, text: string, tone: Tone | null = null): Promise<void> {
+  if (text && text !== (await read($, news))) {
+    isNewsLast = true
+  }
+  await update($, news, () => text)
+  await update($, newsTone, () => tone ?? 'army')
 }
 
 // Folds the band, which pauses the battle where it stands, or opens it, on a scene
@@ -364,7 +468,11 @@ async function wake($: EngineInterface): Promise<void> {
     await $.ui.invalidate('ui.render')
   }
   if (!(await read($, isLoaded))) {
-    const stored = (await $.store.get(STORE_KEY)) as Partial<Stored> | undefined
+    const own = await keyOf($)
+    await forget($, own)
+    const stored = ((await $.store.get(own)) ?? (await $.store.get(STORE_KEY))) as Partial<Stored> | undefined
+    // A player with a game saved from before the lesson knows the game already.
+    isLessonDue = !(await $.store.get(LESSON_KEY)) && !stored
     if (typeof stored?.state === 'string' && stored.work) {
       await update($, state, () => stored.state ?? '')
       await update($, progress, () => ({ ...NO_WORK, ...stored.work }))
@@ -391,10 +499,11 @@ async function wake($: EngineInterface): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: COMMAND, description: '"test" fields one of each line, "card" plays the next card of the deck' })
+    await $.command.register({ name: COMMAND, description: '"lesson" plays the short battle the cat leads, "test" fields one of each line, "card" plays the next card of the deck' })
     await serial($, () => wake($))
     beat?.cancel()
     beat = $.clock.every(BEAT_MS, () => void look($))
+    isDev = await $.fs.exists(`${$.plugin.root}/sim/Cargo.toml`).catch(() => false)
 
     return next(e)
   })
@@ -411,6 +520,12 @@ export const register: Register = on => {
     if (word === 'card') {
       await act($, 'card', named.join(' '))
       return { text: 'The die rolls over the stopped battle while Claude works. A face can follow the name: "card Misfire deleted 30".' }
+    }
+    // The lesson again, at any time.
+    if (e.args.trim() === 'lesson') {
+      await act($, 'lesson')
+      await update($, isFolded, () => false)
+      return { text: 'The scholar cat leads a short battle. Restart skips it.' }
     }
     // The end of a match, shown without playing one.
     if (e.args.trim() === 'victory' || e.args.trim() === 'defeated') {
@@ -431,7 +546,7 @@ export const register: Register = on => {
     }
     if (result.deny === undefined && result.isError) {
       await update($, progress, w => ({ ...w, errors: w.errors + 1 }))
-      await light($, `${toolOf(String(e.tool))} failed`)
+      await light($, `${toolOf(String(e.tool)).toUpperCase()} FAILED`, 'fury')
     }
 
     return result
@@ -463,7 +578,7 @@ export const register: Register = on => {
     const result = await next(e)
     if (e.trigger !== 'precompute' && !e.agentId && !('skip' in result && result.skip)) {
       await update($, progress, w => ({ ...w, compactions: w.compactions + 1 }))
-      await light($, '')
+      await light($, 'CONTEXT COMPACTED', 'totem')
     }
 
     return result
@@ -474,7 +589,7 @@ export const register: Register = on => {
     const v = await read($, view)
     if (e.element === 'title-click') {
       if (v.screen === 'title') {
-        await act($, v.canContinue ? 'go' : 'new')
+        await act($, v.canContinue ? 'go' : isLessonDue ? 'lesson' : 'new')
       }
       return {}
     }
@@ -609,13 +724,18 @@ export const register: Register = on => {
       }
       const rows = Math.min(ROWS, Math.max(4, e.props.maxRows - 2))
       // The row over the field, Hide in its corner, the same on every screen. Restart
-      // beside it wherever the title's own Buttons are not.
+      // beside it, on the title too while a match is saved: a click on the title goes
+      // on with that match. The terminal keeps the title's own Buttons.
+      const dev = isDev ? <Text key="dev" bold color="#F4BD60">DEV</Text> : null
       const corner = (plates: CornerProps['plates']) =>
         desk ? (
-          <Box key="corner" position="relative" flexDirection="column" flexShrink={0}>
-            <desk.Svg source={plateSvg(plates.map(p => p.label))} alt={NO_TIP} width={plates.length * PLATE_PX.width + (plates.length - 1) * PLATE_PX.gap} height={PLATE_PX.height} />
-            <Box key="corner-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
-              <desk.Client key="corner-click" module="./corner-client.tsx" props={{ columns: plates.length * PLATE_COLUMNS, plates } satisfies CornerProps} width="100%" height={1} />
+          <Box key="corner-row" flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
+            {dev}
+            <Box key="corner" position="relative" flexDirection="column" flexShrink={0}>
+              <desk.Svg source={plateSvg(plates.map(p => p.label))} alt={NO_TIP} width={plates.length * PLATE_PX.width + (plates.length - 1) * PLATE_PX.gap} height={PLATE_PX.height} />
+              <Box key="corner-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
+                <desk.Client key="corner-click" module="./corner-client.tsx" props={{ columns: plates.length * PLATE_COLUMNS, plates } satisfies CornerProps} width="100%" height={1} />
+              </Box>
             </Box>
           </Box>
         ) : null
@@ -623,9 +743,10 @@ export const register: Register = on => {
         <Box key="top" flexDirection="row" alignItems="center" justifyContent="space-between" width="100%">
           {left}
           {desk ? (
-            corner([...(v.screen === 'title' ? [] : [{ key: 'restart', label: 'Restart' }]), { key: 'fold', label: 'Hide' }])
+            corner([...(v.screen === 'title' && !v.canContinue ? [] : [{ key: 'restart', label: 'Restart' }]), { key: 'fold', label: 'Hide' }])
           ) : (
             <Box key="corner" flexDirection="row" alignItems="center" gap={1}>
+              {dev}
               {v.screen === 'title' ? null : <Button key="restart" label="Restart" variant="secondary" onPress={() => void act($, 'new')} />}
               <Button key="fold" label="Hide" variant="secondary" onPress={() => void fold($, true)} />
             </Box>
@@ -644,7 +765,8 @@ export const register: Register = on => {
         )
       }
       // The still backdrop with what lies over it, and a clear layer that hears a
-      // click on the picture.
+      // click on the picture. On the desktop that click is the whole control: Buttons
+      // under the picture only said it again.
       const size: TitleProps = { columns: e.props.bodyColumns, rows }
       const field = (key: string, source: string, click: RenderElement) =>
         desk ? (
@@ -676,7 +798,6 @@ export const register: Register = on => {
             <Box flexDirection="column" width={e.props.bodyColumns}>
               {topRow(blank)}
               {field('title', art?.title ?? '', <desk.Client key="title-click" module="./title-client.tsx" props={size} width={e.props.bodyColumns} height={rows} />)}
-              {row}
             </Box>
           )
         }
@@ -704,7 +825,6 @@ export const register: Register = on => {
             <Box flexDirection="column" width={e.props.bodyColumns}>
               {topRow(blank)}
               {field('draft', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="draft-click" module="./draft-client.tsx" props={{ ...size, cards: 3 } satisfies DraftProps} width={e.props.bodyColumns} height={rows} />)}
-              {row}
             </Box>
           )
         }
@@ -731,7 +851,6 @@ export const register: Register = on => {
             <Box flexDirection="column" width={e.props.bodyColumns}>
               {topRow(blank)}
               {field('mode', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="mode-click" module="./draft-client.tsx" props={{ ...size, cards: 2 } satisfies DraftProps} width={e.props.bodyColumns} height={rows} />)}
-              {row}
             </Box>
           )
         }
@@ -763,14 +882,14 @@ export const register: Register = on => {
                 <Box key="wall" position="absolute" top={0} left={0} flexDirection="column" width="100%">
                   <desk.Svg source={shown?.layers[0] ?? ''} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
                 </Box>
+                {/* Only the reels move: the five on the wall are a plain image, which comes up at once. */}
                 <Box key="reels" position="absolute" top={0} left={0} flexDirection="column" width="100%">
-                  <desk.Svg source={shown?.layers[1] ?? ''} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} isInteractive />
+                  <desk.Svg source={shown?.layers[1] ?? ''} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} isInteractive={v.reveal > 0} />
                 </Box>
                 <Box key="spin-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
                   <desk.Client key="spin-click" module="./title-client.tsx" props={size} width={e.props.bodyColumns} height={rows} />
                 </Box>
               </Box>
-              {row}
             </Box>
           )
         }
@@ -795,7 +914,6 @@ export const register: Register = on => {
             <Box flexDirection="column" width={e.props.bodyColumns}>
               {topRow(blank)}
               {field('over', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="over-click" module="./title-client.tsx" props={size} width={e.props.bodyColumns} height={rows} />)}
-              {row}
             </Box>
           )
         }
@@ -839,7 +957,18 @@ export const register: Register = on => {
         </Box>
       )
       const { said, threat } = await read($, flash)
-      const flashColumns = Math.round((e.props.bodyColumns * FLASH.width) / FIELD_PX.width)
+      const told = v.screen === 'battle' ? await read($, news) : ''
+      const toldTone = await read($, newsTone)
+      const fogged = v.screen === 'battle' || v.screen === 'dice' ? await read($, fog) : ''
+      const catted = v.screen === 'battle' ? await read($, cat) : ''
+      // The board ends before Restart and Hide begin: at its full width a narrow band
+      // laid the orcs' line under Restart (seen 2026-11-03).
+      const boardColumns = Math.max(0, Math.min(Math.round((BOARD_PX * PLATE_COLUMNS) / PLATE_PX.width), e.props.bodyColumns - 2 * PLATE_COLUMNS - 3 - (isDev ? DEV_COLUMNS : 0)))
+      const lit = [said, threat].filter(Boolean).join(' · ')
+      const board: BoardProps =
+        told && (isNewsLast || !lit)
+          ? { columns: boardColumns, text: told, color: BOARD_INK[toldTone], stamp: 0, fade: null }
+          : { columns: boardColumns, text: lit, color: BOARD_INK[threat.startsWith('ORC TOTEM') ? 'totem' : threat ? 'orcs' : 'mana'], stamp: litCount, fade: FLASH }
       if (desk) {
         const top = await read($, cover)
         const still = pictures.get(await read($, stand))
@@ -865,7 +994,7 @@ export const register: Register = on => {
         const rolled = isRolling ? pictures.get(v.id) : undefined
         const bays: Bay[] = held.hire.map(c => {
           const up = held.forms.find(f => f.key.split(':')[1] === c.key.split(':')[1])
-          return { price: c.price ?? '', count: c.count ?? 0, lit: c.lit && !isRolling, up: up ? { price: up.price ?? '', lit: up.lit && !isRolling } : null }
+          return { price: c.price ?? '', count: c.count ?? 0, lit: c.lit && !isRolling, up: up ? { price: up.price ?? '', lit: up.lit && !isRolling } : null, out: c.out === null || c.out === undefined || isRolling ? null : c.out * STEP_MS, wanted: (c.wanted ?? false) && !isRolling }
         })
         const hireBar = (
           <Box key="hire-bar" position="relative" flexDirection="column" width="100%" marginTop={BAR_LIFT}>
@@ -879,13 +1008,10 @@ export const register: Register = on => {
           <Box flexDirection="column" width={e.props.bodyColumns}>
             {/* Always drawn, so the field does not jump as the row comes and goes. */}
             {topRow(
-              <Box key="flash" position="relative" flexDirection="column">
-                <desk.Svg source={flashSvg(said, threat)} alt={NO_TIP} width={FLASH.width} height={FLASH.height} isInteractive />
-                {said || threat ? (
-                  <Box key="flash-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
-                    <desk.Client key="flash-click" module="./title-client.tsx" props={{ columns: flashColumns, rows: 1 }} width={flashColumns} height={1} />
-                  </Box>
-                ) : null}
+              // In the row's flow: laid over a box with nothing else in it, the words took
+              // its size, none, and were not seen (2026-11-06).
+              <Box key="flash" flexDirection="column" width={Math.max(1, boardColumns)} flexShrink={0}>
+                <desk.Client key="flash-click" module="./board-client.tsx" props={board} width={Math.max(1, boardColumns)} height={1} />
               </Box>,
             )}
             <Box position="relative" flexDirection="column" width="100%">
@@ -895,6 +1021,9 @@ export const register: Register = on => {
               {flat('stand-0', still?.layers[0])}
               {flat('stand-1', still?.layers[1])}
               {[0, 1].flatMap(n => [0, 1].map(layer => slot(n, layer)))}
+              {flat('fog', fogged || undefined)}
+              {/* Still: the desktop takes images out of a picture that moves. */}
+              {flat('cat', catted || undefined)}
               {flat('roll-veil', rolled?.layers[2])}
               <Box key="roll-die" position="absolute" top={0} left={0} flexDirection="column" width="100%">
                 {rolled?.layers[3] ? <desk.Svg source={rolled.layers[3]} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} isInteractive /> : null}
@@ -921,7 +1050,7 @@ export const register: Register = on => {
         <Box flexDirection="column" width={e.props.bodyColumns}>
           {topRow(
             <Text bold color="#F4BD60">
-              {(isRolling ? v.alt : `${said} ${threat}`.trim()) || ' '}
+              {(isRolling ? v.alt : lit) || ' '}
             </Text>,
           )}
           <Text color="#FFF0CE">{v.hud}</Text>

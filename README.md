@@ -21,16 +21,20 @@ claude plugin install banners-of-lore --marketplace Nero0909/banners-of-lore
 
 ## What you need
 
-- A Mac with Apple Silicon (M1 or newer) and macOS 11 or newer. There is no build for other systems yet.
+- One of these systems:
+  - a Mac with Apple Silicon (M1 or newer) and macOS 11 or newer;
+  - Windows 10 or 11, 64-bit. Windows on ARM runs the x64 core through its built-in emulation.
+
+  There is no build for Intel Macs or Linux yet.
 - Claude Desktop for the full picture. In a terminal the game shows text and buttons only.
 
 ## What the mod does on your computer
 
 - Runs the game core from the `core` folder.
 - Keeps the match in Claude's data.
-- Writes match records to `~/.claude/banners-of-lore/matches`.
+- Writes match records to `~/.claude/banners-of-lore/matches` (on Windows, `%USERPROFILE%\.claude\banners-of-lore\matches`).
 
-The hooks make no network calls. The game's sources are not in this repository: `core` holds a compiled file.
+The hooks make no network calls. The game's sources are not in this repository: `core` holds one compiled file for each system, and the mod picks the one for yours.
 
 ## Remove
 
@@ -46,7 +50,7 @@ claude plugin uninstall banners-of-lore
 
 В Claude Desktop на вкладке Code нажми `+` у поля ввода, затем **Plugins** и **Add marketplace**. Введи `Nero0909/banners-of-lore`, нажми **Add plugin** и выбери Banners of Lore. Открой новую сессию и дай Claude задачу: игра появится над полем ввода, пока Claude работает.
 
-Нужен Mac на Apple Silicon (M1 или новее). Мод бесплатен для личного некоммерческого использования. Распространять, продавать и менять его нельзя: подробности в [LICENSE](LICENSE).
+Нужен Mac на Apple Silicon (M1 или новее) или 64-битная Windows 10 или 11. Мод бесплатен для личного некоммерческого использования. Распространять, продавать и менять его нельзя: подробности в [LICENSE](LICENSE).
 
 ## License
 
