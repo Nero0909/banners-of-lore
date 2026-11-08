@@ -133,17 +133,45 @@ function serial($: EngineInterface, work: () => Promise<void>): Promise<void> {
   return run
 }
 
-// The binary for this machine. A mod carries one for each it runs on: darwin-arm64 and
-// windows-x86_64.exe, which Windows on ARM runs too. Windows is told by OS=Windows_NT,
-// not by uname: Git Bash puts a uname there that answers MINGW64_NT-10.0 x86_64.
-async function binaryFor($: EngineInterface): Promise<string> {
-  if (!binary) {
-    const os = await $.env.get('OS').catch(() => undefined)
-    const { stdout } = os === 'Windows_NT' ? { stdout: '' } : await $.process.run(['uname', '-sm']).catch(() => ({ stdout: '' }))
-    binary = `${$.plugin.root}/core/${coreName(os, stdout)}`
+// The binary for this machine, once one has answered. A mod carries one for each it
+// runs on: darwin-arm64 and windows-x86_64.exe, which Windows on ARM runs too.
+// Windows is told by OS=Windows_NT, not by uname: Git Bash puts a uname there that
+// answers MINGW64_NT-10.0 x86_64. The guess goes first, and every other core in the
+// folder after it, should a system name the guess wrongly (2026-11-08).
+async function coresFor($: EngineInterface): Promise<string[]> {
+  if (binary) {
+    return [binary]
+  }
+  const os = await $.env.get('OS').catch(() => undefined)
+  const { stdout } = os === 'Windows_NT' ? { stdout: '' } : await $.process.run(['uname', '-sm']).catch(() => ({ stdout: '' }))
+  const guess = coreName(os, stdout)
+  const folder = await $.fs.list(`${$.plugin.root}/core`).catch(() => [])
+  const others = folder.map(f => f.name).filter(n => n.startsWith('banners-of-lore-core-') && n !== guess && !n.endsWith('.new'))
+
+  return [guess, ...others].map(n => `${$.plugin.root}/core/${n}`)
+}
+
+// Runs a request with each core in turn until one answers. A core built for another
+// system cannot start here: the run rejects or exits at once, and the next is tried.
+// None answering, the first one's failure stands.
+export async function firstAnswer<R extends { exitCode: number }>(paths: readonly string[], run: (path: string) => Promise<R>): Promise<{ path: string; result: R }> {
+  let first: { result?: R; error?: unknown } | undefined
+  for (const path of paths) {
+    try {
+      const result = await run(path)
+      if (result.exitCode === 0) {
+        return { path, result }
+      }
+      first ??= { result }
+    } catch (error) {
+      first ??= { error }
+    }
+  }
+  if (!first?.result) {
+    throw first?.error ?? new Error('no core for this system')
   }
 
-  return binary
+  return { path: '', result: first.result }
 }
 
 // The core's file name from the OS variable and what `uname -sm` answered.
@@ -175,7 +203,9 @@ async function ask($: EngineInterface, op: string, arg = ''): Promise<Answer & P
   const v = await read($, view)
   const elapsed = Math.min(v.steps, Math.max(0, Math.round(((await $.clock.now()) - v.at) / STEP_MS)))
   const input = JSON.stringify({ op, arg, state: await read($, state), elapsed, seed: Math.floor(await $.clock.now()) % 4294967296, ...(await read($, progress)) })
-  const { exitCode, stdout, stderr } = await $.process.run([await binaryFor($)], { stdin: input, timeoutMs: 8000 })
+  const { path, result } = await firstAnswer(await coresFor($), p => $.process.run([p], { stdin: input, timeoutMs: 8000 }))
+  binary ||= path
+  const { exitCode, stdout, stderr } = result
   if (exitCode !== 0) {
     throw new Error(`the game stopped: ${stderr.slice(0, 160)}`)
   }
