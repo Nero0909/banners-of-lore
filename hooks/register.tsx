@@ -133,20 +133,28 @@ function serial($: EngineInterface, work: () => Promise<void>): Promise<void> {
   return run
 }
 
-// The binary for this machine, once one has answered. A mod carries one for each it
-// runs on: darwin-arm64 and windows-x86_64.exe, which Windows on ARM runs too.
-// Windows is told by OS=Windows_NT, not by uname: Git Bash puts a uname there that
-// answers MINGW64_NT-10.0 x86_64. The guess goes first, and every other core in the
-// folder after it, should a system name the guess wrongly (2026-11-08).
+// Every core's file name starts so: banners-of-lore-core-<system>-<machine>.
+const CORE = 'banners-of-lore-core-'
+
+// The binary for this machine, once one has answered. A mod carries one for each
+// system Claude Desktop runs on: darwin-arm64, darwin-x86_64, linux-x86_64,
+// linux-aarch64, windows-x86_64.exe and windows-aarch64.exe (2026-11-08). Windows is
+// told by OS=Windows_NT and its processor by PROCESSOR_ARCHITECTURE, not by uname:
+// Git Bash puts a uname there that answers MINGW64_NT-10.0 x86_64. The guess goes
+// first, then the other cores of its system, then the rest, should a system name the
+// guess wrongly: Windows on ARM runs the x86_64 core too.
 async function coresFor($: EngineInterface): Promise<string[]> {
   if (binary) {
     return [binary]
   }
   const os = await $.env.get('OS').catch(() => undefined)
+  const cpu = os === 'Windows_NT' ? await $.env.get('PROCESSOR_ARCHITECTURE').catch(() => undefined) : undefined
   const { stdout } = os === 'Windows_NT' ? { stdout: '' } : await $.process.run(['uname', '-sm']).catch(() => ({ stdout: '' }))
-  const guess = coreName(os, stdout)
+  const guess = coreName(os, stdout, cpu)
+  const systemOf = (name: string) => name.slice(CORE.length).split('-')[0]
   const folder = await $.fs.list(`${$.plugin.root}/core`).catch(() => [])
-  const others = folder.map(f => f.name).filter(n => n.startsWith('banners-of-lore-core-') && n !== guess && !n.endsWith('.new'))
+  const others = folder.map(f => f.name).filter(n => n.startsWith(CORE) && n !== guess && !n.endsWith('.new'))
+    .sort((x, y) => Number(systemOf(y) === systemOf(guess)) - Number(systemOf(x) === systemOf(guess)))
 
   return [guess, ...others].map(n => `${$.plugin.root}/core/${n}`)
 }
@@ -174,12 +182,15 @@ export async function firstAnswer<R extends { exitCode: number }>(paths: readonl
   return { path: '', result: first.result }
 }
 
-// The core's file name from the OS variable and what `uname -sm` answered.
-export function coreName(os: string | undefined, uname: string): string {
+// The core's file name from the OS variable, what `uname -sm` answered and, on
+// Windows, PROCESSOR_ARCHITECTURE (AMD64 or ARM64).
+export function coreName(os: string | undefined, uname: string, cpu?: string): string {
   const [system = '', machine = ''] = uname.trim().toLowerCase().split(/\s+/)
-  const isWindows = os === 'Windows_NT' || /^(mingw|msys|cygwin|windows)/.test(system)
+  if (os === 'Windows_NT' || /^(mingw|msys|cygwin|windows)/.test(system)) {
+    return `${CORE}windows-${/^(arm64|aarch64)$/i.test(cpu ?? machine) ? 'aarch64' : 'x86_64'}.exe`
+  }
 
-  return `banners-of-lore-core-${isWindows ? 'windows-x86_64.exe' : `${system}-${machine}`}`
+  return `${CORE}${system}-${machine}`
 }
 
 // Where matches are kept: ~/.claude/banners-of-lore/matches, whether the mod runs from
