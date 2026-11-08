@@ -18,12 +18,18 @@ export type Offer = { key: string; label: string; text: string }
 export type Base = { fury: number; totems: number; usedErrors: number; usedCompactions: number }
 
 // What the row over the field says.
-export type Flash = { said: string; threat: string }
+export type Flash = { said: string; threat: string; grew?: 'fury' | 'totem' | '' }
+
+// Where a click on a still picture means something: whole percents across, whole rows down.
+// Its light under the pointer: drop half rows below its top, tall rows high.
+export type Zone = { key: string; left: number; right: number; top: number; bottom: number; drop?: number; tall?: number }
 
 // What the core answers: a toast alone, or a screen.
 export type Answer = {
   toast?: string
-  screen?: 'title' | 'mode' | 'draft' | 'spin' | 'over' | 'battle' | 'dice'
+  screen?: 'title' | 'settings' | 'mode' | 'draft' | 'spin' | 'over' | 'battle' | 'dice'
+  // The plates of the title and the settings, where they stand.
+  zones?: Zone[]
   state?: string
   steps?: number
   // How long the die rolls over the stopped battle, in steps.
@@ -55,7 +61,7 @@ export type Answer = {
 }
 
 // The pictures that never change and how Claude's tokens turn into work.
-export type Art = { backdrop: string; title: string; rates: { workPerOutput: number; workPerInput: number } }
+export type Art = { backdrop: string; title: string; rates: { workPerOutput: number; workPerInput: number }; words?: Record<string, string>; lang?: string }
 
 // A scene's layers and what they say, for as long as a frame shows them.
 export type Picture = { layers: string[]; alt: string }
@@ -63,7 +69,8 @@ export type Picture = { layers: string[]; alt: string }
 // What the band shows now. at is the clock time its scene began.
 export type View = {
   id: number
-  screen: 'title' | 'mode' | 'draft' | 'spin' | 'over' | 'battle' | 'dice'
+  screen: 'title' | 'settings' | 'mode' | 'draft' | 'spin' | 'over' | 'battle' | 'dice'
+  zones: Zone[]
   steps: number
   roll: number
   reveal: number
@@ -84,7 +91,7 @@ export type Work = { work: number; errors: number; compactions: number; tokens: 
 export type Stored = { state: string; work: Work; at?: number }
 
 // The size of the clear layer that hears a click on a picture.
-export type TitleProps = { columns: number; rows: number }
+export type TitleProps = { columns: number; rows: number; zones?: Zone[] }
 export type DraftProps = { columns: number; rows: number; cards: number }
 
 // What the clear layer over the hire bar shows: each bay's price, how many the line

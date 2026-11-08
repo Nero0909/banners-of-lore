@@ -12,6 +12,18 @@ const STORE_KEY = 'army'
 // Whether this player has had the lesson: one key for all sessions, so a new session
 // does not teach again, and not under STORE_KEY, whose old games forget() clears.
 const LESSON_KEY = 'lesson'
+// The player's language, one for all sessions: a file of mod/localization, the core's words.
+const LANG_KEY = 'lang'
+// The languages the core speaks, and their names in themselves.
+const LANGS: Record<string, string> = { en: 'English', ru: 'Русский' }
+// The newest version out, and when it was read: the published manifest, once a day.
+const LATEST_KEY = 'latest'
+const LATEST_URL = 'https://raw.githubusercontent.com/Nero0909/banners-of-lore/main/.claude-plugin/plugin.json'
+const DAY_MS = 24 * 60 * 60 * 1000
+// What a click on the news of a newer version copies.
+const UPDATE_COMMAND = 'claude plugin update banners-of-lore@banners-of-lore'
+// The game's server on Discord, once it has one: its medallion shows when this is set.
+const DISCORD_URL = ''
 // The store holds 4 MiB in all and a game some 20 KB: past this many sessions, the
 // games of those seen longest ago go.
 const KEEP_GAMES = 20
@@ -29,8 +41,10 @@ const BAR_LIFT = -0.5
 // A plate in the band's corner: its picture, written by pack-screens.py, its size and
 // its width in columns of the band for the layer that hears it.
 const PLATE_ART = 'data:image/webp;base64,UklGRsYAAABXRUJQVlA4TLoAAAAvMwADAHegqJEk5beMh/6FnLXToaaRFEjA3fFUlNDjGm/4UNBIUvO9P/5VIgHmP7pOngeCeDMSASB0REbEkQWrMP/T3u9meXfBTW3bToQFjCCBjpYKREQBIAEFoc5XAiVdDhOqcTM/rIuDiP4rcNtGSY4ZfrFJYtkA5EU5q6dQrUrFQXcK869BKPoAgEH0Bd90YRB92W1vDKJvTn5UIvqq2qUQfflkUYi+YcDIIPo833cYRN+Tt3/wXwA='
-const PLATE_PX = { width: 78, height: 19.5, gap: 3 }
-const PLATE_COLUMNS = 10
+// 92 wide: «Показать» ran into the nails at 78, which hold 8 of the plate's 52 cells at
+// each end (the user, 2026-11-08).
+const PLATE_PX = { width: 92, height: 19.5, gap: 3 }
+const PLATE_COLUMNS = 12
 // The row over the field: words at its left end with what happened last, and Restart
 // and Hide at the right. What Claude did holds, then fades away. The words stand bare:
 // the user took their wooden frame away (2026-11-06).
@@ -54,7 +68,7 @@ const FALL_MS = 3000
 const BEAT_MS = 2000
 const LATE_MS = 1500
 // Bump with any change to what the atoms hold.
-const SHAPE = 'v19'
+const SHAPE = 'v20'
 const FONT = 'system-ui,-apple-system,Segoe UI,sans-serif'
 
 const NO_BASE: Base = { fury: 0, totems: 0, usedErrors: 0, usedCompactions: 0 }
@@ -63,7 +77,7 @@ const NO_WORK: Work = { work: 0, errors: 0, compactions: 0, tokens: 0, lines: [0
 // the pictures (seen 2026-11-01), so this one is there and shows nothing.
 const NO_TIP = '\u200b'
 
-const TITLE: View = { id: 0, screen: 'title', steps: 0, roll: 0, reveal: 0, at: 0, hud: '', short: 'BANNERS OF LORE', alt: '', canContinue: false, offer: [], base: NO_BASE }
+const TITLE: View = { id: 0, screen: 'title', zones: [], steps: 0, roll: 0, reveal: 0, at: 0, hud: '', short: 'BANNERS OF LORE', alt: '', canContinue: false, offer: [], base: NO_BASE }
 
 const isLoaded = atom({ plugin: 'banners-of-lore', key: 'isLoaded' } as const, false, { shape: SHAPE })
 // Folded, the band is one row and the battle waits where it stood.
@@ -120,6 +134,29 @@ let isDev = false
 let isLessonDue = false
 const DEV_COLUMNS = 4
 const pictures = new Map<number, Picture>()
+// The language asked for, read from the store once; empty is English.
+let lang: string | null = null
+// This build's version and home page, from its own manifest, and the newest version out.
+let version = ''
+let homepage = ''
+let latest = ''
+// What the hooks say themselves, in that language, as the core gave it with the art.
+let words: Record<string, string> = {}
+
+// A word of the hooks: the core's in the chosen language, else the English here, which a
+// test of the core holds equal to mod/localization/en.json under hook.<key>.
+export function say(key: string, english: string, args: Record<string, string | number> = {}): string {
+  return Object.entries(args).reduce((text, [name, value]) => text.split(`{${name}}`).join(String(value)), words[key] ?? english)
+}
+
+async function langOf($: EngineInterface): Promise<string> {
+  if (lang === null) {
+    const stored = await $.store.get(LANG_KEY).catch(() => undefined)
+    lang = typeof stored === 'string' ? stored : ''
+  }
+
+  return lang
+}
 let queue: Promise<void> = Promise.resolve()
 
 function serial($: EngineInterface, work: () => Promise<void>): Promise<void> {
@@ -209,11 +246,92 @@ async function matchesDir($: EngineInterface): Promise<string> {
   return matches
 }
 
+// What the title shows besides the menu: our version, a newer one, the links, the lesson.
+function front(): { version: string; latest: string; links: string[]; lessonDue: boolean } {
+  return { version, latest, links: Object.keys(links()), lessonDue: isLessonDue }
+}
+
+// The links the title's medallions open, in their order.
+function links(): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (DISCORD_URL) {
+    out.discord = DISCORD_URL
+  }
+  if (homepage) {
+    out.site = homepage
+  }
+  return out
+}
+
+// This build's manifest: its version and home page.
+async function readManifest($: EngineInterface): Promise<void> {
+  const text = await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => '')
+  try {
+    const m = JSON.parse(text) as { version?: string; homepage?: string }
+    version = m.version ?? ''
+    homepage = m.homepage ?? ''
+  } catch {
+    // A manifest that does not read shows no version.
+  }
+}
+
+// The newest version out: the published manifest, read at most once a day and kept for
+// all sessions. The one kept is known at once; a new read goes on in the background, so a
+// slow or refused network never holds the band, and shows on the title when it comes.
+async function knownLatest($: EngineInterface): Promise<{ version?: string; at?: number } | undefined> {
+  const known = (await $.store.get(LATEST_KEY).catch(() => undefined)) as { version?: string; at?: number } | undefined
+  latest = known?.version ?? ''
+  return known
+}
+
+async function readLatest($: EngineInterface, known: { at?: number } | undefined): Promise<void> {
+  const now = await $.clock.now()
+  if (known?.at && now - known.at < DAY_MS) {
+    return
+  }
+  const got = await $.http.fetch(LATEST_URL).catch(() => null)
+  if (!got?.ok) {
+    return
+  }
+  try {
+    const out = (JSON.parse(got.text) as { version?: string }).version ?? ''
+    if (!out) {
+      return
+    }
+    await $.store.set(LATEST_KEY, { version: out, at: now })
+    if (out !== latest) {
+      latest = out
+      if ((await read($, view)).screen === 'title') {
+        await act($, 'open')
+      }
+    }
+  } catch {
+    // A page that is not the manifest says nothing.
+  }
+}
+
+// A link in the player's browser: macOS, then Linux, then Windows, whichever starts.
+async function openLink($: EngineInterface, url: string): Promise<void> {
+  for (const argv of [['open', url], ['xdg-open', url], ['cmd', '/c', 'start', '', url]]) {
+    const done = await $.process.run(argv, { timeoutMs: 4000 }).catch(() => null)
+    if (done?.exitCode === 0) {
+      return
+    }
+  }
+}
+
+// The language, for all sessions: the core's words and pictures, drawn again.
+async function setLang($: EngineInterface, code: string): Promise<void> {
+  await $.store.set(LANG_KEY, code)
+  lang = code
+  await serial($, () => redraw($))
+}
+
 // One request to the game. elapsed is how far the running scene has come.
 async function ask($: EngineInterface, op: string, arg = ''): Promise<Answer & Partial<Art>> {
   const v = await read($, view)
   const elapsed = Math.min(v.steps, Math.max(0, Math.round(((await $.clock.now()) - v.at) / STEP_MS)))
-  const input = JSON.stringify({ op, arg, state: await read($, state), elapsed, seed: Math.floor(await $.clock.now()) % 4294967296, ...(await read($, progress)) })
+  const input = JSON.stringify({ op, arg, state: await read($, state), elapsed, seed: Math.floor(await $.clock.now()) % 4294967296, lang: await langOf($), ...front(), ...(await read($, progress)) })
   const { path, result } = await firstAnswer(await coresFor($), p => $.process.run([p], { stdin: input, timeoutMs: 8000 }))
   binary ||= path
   const { exitCode, stdout, stderr } = result
@@ -314,6 +432,7 @@ async function show($: EngineInterface, a: Answer): Promise<void> {
     short: a.short ?? '',
     alt: a.alt ?? '',
     canContinue: a.canContinue ?? false,
+    zones: a.zones ?? [],
     offer: a.offer ?? [],
     base: a.base ?? NO_BASE,
   }
@@ -451,7 +570,7 @@ const FADE_MS = FLASH.holdMs + FLASH.fadeMs
 
 // What the row says of a model request.
 export function spentRow(tokens: number, mana: number): string {
-  return `${tokensOf(tokens)} TOKENS SPENT: +${Math.round(mana * 10) / 10} MANA`
+  return say('spent', '{tokens} TOKENS SPENT: +{mana} MANA', { tokens: tokensOf(tokens), mana: Math.round(mana * 10) / 10 })
 }
 
 // Lights the row with what Claude just did and what that paid: a dim line that
@@ -461,11 +580,15 @@ async function light($: EngineInterface, why: string, grew: 'fury' | 'totem' | '
   const base = (await read($, view)).base
   const w = await read($, progress)
   const threat =
-    grew === 'fury' ? `ORCS ENRAGED x${base.fury + w.errors - base.usedErrors}` : grew === 'totem' ? `ORC TOTEM x${base.totems + w.compactions - base.usedCompactions}` : ''
+    grew === 'fury'
+      ? say('enraged', 'ORCS ENRAGED x{n}', { n: base.fury + w.errors - base.usedErrors })
+      : grew === 'totem'
+        ? say('totem', 'ORC TOTEM x{n}', { n: base.totems + w.compactions - base.usedCompactions })
+        : ''
   isNewsLast = false
   litCount += 1
   unlit?.cancel()
-  await update($, flash, () => ({ said: why, threat }))
+  await update($, flash, () => ({ said: why, threat, grew }))
   unlit = $.clock.after(FADE_MS, () => void update($, flash, () => ({ said: '', threat: '' })))
 }
 
@@ -502,10 +625,30 @@ function fold($: EngineInterface, isNow: boolean): Promise<void> {
   })
 }
 
+// The screen there is, drawn again in the language just picked: its pictures and words
+// are the core's, and the art carries the hooks' own.
+async function redraw($: EngineInterface): Promise<void> {
+  art = (await ask($, 'art')) as Art
+  words = art.words ?? {}
+  pictures.clear()
+  const { screen } = await read($, view)
+  const isHidden = await read($, isFolded)
+  const op: Record<string, string> = { title: 'open', settings: 'settings', over: 'over', mode: 'new', spin: 'spin', draft: 'pick', dice: isHidden ? '' : 'roll', battle: isHidden || isTurnOver ? 'hold' : 'unfold' }
+  if (op[screen]) {
+    await show($, await ask($, op[screen]))
+  }
+  await $.ui.invalidate('ui.render')
+}
+
 // The binary's pictures that never change, and the game as stored.
 async function wake($: EngineInterface): Promise<void> {
+  if (!version) {
+    await readManifest($)
+    void readLatest($, await knownLatest($)).catch(() => undefined)
+  }
   if (!art) {
     art = (await ask($, 'art')) as Art
+    words = art.words ?? {}
     await $.ui.invalidate('ui.render')
   }
   if (!(await read($, isLoaded))) {
@@ -530,6 +673,12 @@ async function wake($: EngineInterface): Promise<void> {
   if (v.screen === 'over' && !pictures.has(v.id)) {
     await show($, await ask($, 'over'))
   }
+  if (v.screen === 'title' && !pictures.has(v.id)) {
+    await show($, await ask($, 'open'))
+  }
+  if (v.screen === 'settings' && !pictures.has(v.id)) {
+    await show($, await ask($, 'settings'))
+  }
   if (v.screen === 'mode' && !pictures.has(v.id)) {
     await show($, await ask($, 'new'))
   }
@@ -540,8 +689,8 @@ async function wake($: EngineInterface): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: COMMAND, description: '"lesson" plays the short battle the cat leads, "test" fields one of each line, "card" plays the next card of the deck' })
     await serial($, () => wake($))
+    await $.command.register({ name: COMMAND, description: say('command', '"lesson" plays the short battle the cat leads, "lang" picks the language, "test" fields one of each line, "card" plays the next card of the deck') })
     beat?.cancel()
     beat = $.clock.every(BEAT_MS, () => void look($))
     isDev = await $.fs.exists(`${$.plugin.root}/sim/Cargo.toml`).catch(() => false)
@@ -554,27 +703,37 @@ export const register: Register = on => {
     if (e.args.trim() === 'test') {
       await act($, 'test')
       await update($, isFolded, () => false)
-      return { text: 'One of each line on each side.' }
+      return { text: say('reply.test', 'One of each line on each side.') }
+    }
+    // The language, for all sessions: the core's words and pictures, drawn again.
+    const [verb, code = ''] = e.args.trim().split(/\s+/)
+    if (verb === 'lang') {
+      const list = Object.entries(LANGS).map(([c, name]) => `${c} — ${name}`).join(', ')
+      if (!(code in LANGS)) {
+        return { text: say('reply.lang', 'Language: {name}. Pick one: {list}, as "/banners-of-lore lang ru".', { name: LANGS[(await langOf($)) || 'en'] ?? 'English', list }) }
+      }
+      await setLang($, code)
+      return { text: say('reply.lang_set', 'Language: {name}.', { name: LANGS[code] ?? code }) }
     }
     // A card of the deck, by name or the next one, rolled on the running match.
     const [word, ...named] = e.args.trim().split(/\s+/)
     if (word === 'card') {
       await act($, 'card', named.join(' '))
-      return { text: 'The die rolls over the stopped battle while Claude works. A face can follow the name: "card Misfire deleted 30".' }
+      return { text: say('reply.card', 'The die rolls over the stopped battle while Claude works. A face can follow the name: "card Misfire deleted 30".') }
     }
     // The lesson again, at any time.
     if (e.args.trim() === 'lesson') {
       await act($, 'lesson')
       await update($, isFolded, () => false)
-      return { text: 'The scholar cat leads a short battle. Restart skips it.' }
+      return { text: say('reply.lesson', 'The scholar cat leads a short battle. Restart skips it.') }
     }
     // The end of a match, shown without playing one.
     if (e.args.trim() === 'victory' || e.args.trim() === 'defeated') {
       await act($, 'preview', e.args.trim())
       await update($, isFolded, () => false)
-      return { text: 'A click goes on to the title.' }
+      return { text: say('reply.preview', 'A click goes on to the title.') }
     }
-    return { text: 'The battle runs while Claude works. "/banners-of-lore test" fields one of each line.' }
+    return { text: say('reply.help', 'The battle runs while Claude works. "/banners-of-lore lang" picks the language, "/banners-of-lore test" fields one of each line.') }
   })
 
   // On every tool's path: the lines a call changed bring cards, and an errored call
@@ -587,7 +746,7 @@ export const register: Register = on => {
     }
     if (result.deny === undefined && result.isError) {
       await update($, progress, w => ({ ...w, errors: w.errors + 1 }))
-      await light($, `${toolOf(String(e.tool)).toUpperCase()} FAILED`, 'fury')
+      await light($, say('failed', '{tool} FAILED', { tool: toolOf(String(e.tool)).toUpperCase() }), 'fury')
     }
 
     return result
@@ -619,7 +778,7 @@ export const register: Register = on => {
     const result = await next(e)
     if (e.trigger !== 'precompute' && !e.agentId && !('skip' in result && result.skip)) {
       await update($, progress, w => ({ ...w, compactions: w.compactions + 1 }))
-      await light($, 'CONTEXT COMPACTED', 'totem')
+      await light($, say('compacted', 'CONTEXT COMPACTED'), 'totem')
     }
 
     return result
@@ -628,9 +787,33 @@ export const register: Register = on => {
   // A click on a picture, heard by the clear layer over it.
   on('ui.message', async ($, e, next) => {
     const v = await read($, view)
+    // A plate of the title, by the key the core gave it. A click that names none is the
+    // old title's: the match saved, a first player's lesson, or a new match.
     if (e.element === 'title-click') {
-      if (v.screen === 'title') {
+      const { key } = (e.data ?? {}) as { key?: string }
+      if (v.screen !== 'title') {
+        return {}
+      }
+      if (key === undefined) {
         await act($, v.canContinue ? 'go' : isLessonDue ? 'lesson' : 'new')
+      } else if (key === 'go' || key === 'new' || key === 'lesson' || key === 'settings') {
+        await act($, key)
+      } else if (key === 'update') {
+        const { isCopied } = await $.ui.copy({ text: UPDATE_COMMAND, surface: e.surface })
+        await light($, isCopied ? say('copied', 'UPDATE COMMAND COPIED') : UPDATE_COMMAND)
+      } else if (links()[key]) {
+        await openLink($, links()[key] ?? '')
+      }
+      return {}
+    }
+    if (e.element === 'settings-click') {
+      const { key = '' } = (e.data ?? {}) as { key?: string }
+      if (v.screen === 'settings') {
+        if (key.startsWith('lang:')) {
+          await setLang($, key.slice(5))
+        } else if (key === 'back') {
+          await act($, 'open')
+        }
       }
       return {}
     }
@@ -658,8 +841,10 @@ export const register: Register = on => {
     }
     if (e.element === 'corner-click') {
       const { key } = e.data as { key: string }
+      // Restart goes to the title, where New game starts anew and Continue keeps the
+      // match (the user, 2026-11-08: «Restart должен вести на главный экран»).
       if (key === 'restart') {
-        await act($, 'new')
+        await act($, 'open')
       } else {
         await fold($, key === 'fold')
       }
@@ -760,7 +945,7 @@ export const register: Register = on => {
       const v = await read($, view)
       // After a reload the pictures take a moment to come, and one empty Svg would
       // fail the whole hook (seen 2026-10-31).
-      if (desk && (!art || ((v.screen === 'draft' || v.screen === 'over' || v.screen === 'mode' || v.screen === 'spin') && !pictures.has(v.id)))) {
+      if (desk && (!art || ((v.screen === 'draft' || v.screen === 'over' || v.screen === 'mode' || v.screen === 'spin' || v.screen === 'settings') && !pictures.has(v.id)))) {
         return next(e)
       }
       const rows = Math.min(ROWS, Math.max(4, e.props.maxRows - 2))
@@ -784,12 +969,12 @@ export const register: Register = on => {
         <Box key="top" flexDirection="row" alignItems="center" justifyContent="space-between" width="100%">
           {left}
           {desk ? (
-            corner([...(v.screen === 'title' && !v.canContinue ? [] : [{ key: 'restart', label: 'Restart' }]), { key: 'fold', label: 'Hide' }])
+            corner([...(v.screen === 'title' || v.screen === 'settings' ? [] : [{ key: 'restart', label: say('restart', 'Restart') }]), { key: 'fold', label: say('hide', 'Hide') }])
           ) : (
             <Box key="corner" flexDirection="row" alignItems="center" gap={1}>
               {dev}
-              {v.screen === 'title' ? null : <Button key="restart" label="Restart" variant="secondary" onPress={() => void act($, 'new')} />}
-              <Button key="fold" label="Hide" variant="secondary" onPress={() => void fold($, true)} />
+              {v.screen === 'title' ? null : <Button key="restart" label={say('restart', 'Restart')} variant="secondary" onPress={() => void act($, 'open')} />}
+              <Button key="fold" label={say('hide', 'Hide')} variant="secondary" onPress={() => void fold($, true)} />
             </Box>
           )}
         </Box>
@@ -798,9 +983,9 @@ export const register: Register = on => {
       if (await read($, isFolded)) {
         return (
           <Box flexDirection="row" alignItems="center" gap={1} width={e.props.bodyColumns}>
-            {desk ? corner([{ key: 'unfold', label: 'Show' }]) : <Button key="unfold" label="Show" onPress={() => void fold($, false)} />}
+            {desk ? corner([{ key: 'unfold', label: say('show', 'Show') }]) : <Button key="unfold" label={say('show', 'Show')} onPress={() => void fold($, false)} />}
             <Text bold color="#F4BD60">
-              {isFought(v) ? `PAUSED · ${v.short}` : v.short}
+              {isFought(v) ? say('paused', 'PAUSED · {short}', { short: v.short }) : v.short}
             </Text>
           </Box>
         )
@@ -828,17 +1013,17 @@ export const register: Register = on => {
           <Box flexDirection="row" alignItems="center" flexWrap="wrap" gap={1}>
             {v.canContinue
               ? [
-                  <Button key="continue" label="Continue" variant="primary" onPress={() => void act($, 'go')} />,
-                  <Button key="start" label="New match" variant="secondary" onPress={() => void act($, 'new')} />,
+                  <Button key="continue" label={say('continue', 'Continue')} variant="primary" onPress={() => void act($, 'go')} />,
+                  <Button key="start" label={say('new_match', 'New match')} variant="secondary" onPress={() => void act($, 'new')} />,
                 ]
-              : [<Button key="start" label="Play" variant="primary" onPress={() => void act($, 'new')} />]}
+              : [<Button key="start" label={say('play', 'Play')} variant="primary" onPress={() => void act($, 'new')} />]}
           </Box>
         )
         if (desk) {
           return (
             <Box flexDirection="column" width={e.props.bodyColumns}>
               {topRow(blank)}
-              {field('title', art?.title ?? '', <desk.Client key="title-click" module="./title-client.tsx" props={size} width={e.props.bodyColumns} height={rows} />)}
+              {field('title', pictures.get(v.id)?.layers[0] ?? art?.title ?? '', <desk.Client key="title-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width={e.props.bodyColumns} height={rows} />)}
             </Box>
           )
         }
@@ -850,6 +1035,28 @@ export const register: Register = on => {
             </Text>
             <Text>Raze the orc gate and hold your castle</Text>
             {row}
+          </Box>
+        )
+      }
+      // The settings, over the field as the title: the language for now, and back.
+      if (v.screen === 'settings') {
+        if (desk) {
+          return (
+            <Box flexDirection="column" width={e.props.bodyColumns}>
+              {topRow(blank)}
+              {field('settings', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="settings-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width={e.props.bodyColumns} height={rows} />)}
+            </Box>
+          )
+        }
+        return (
+          <Box flexDirection="column" width={e.props.bodyColumns}>
+            {topRow(blank)}
+            <Box flexDirection="row" alignItems="center" flexWrap="wrap" gap={1}>
+              {Object.entries(LANGS).map(([code, name]) => (
+                <Button key={`lang:${code}`} label={name} variant={code === ((lang ?? '') || 'en') ? 'primary' : 'secondary'} onPress={() => void setLang($, code)} />
+              ))}
+              <Button key="back" label={say('back', 'Back')} variant="secondary" onPress={() => void act($, 'open')} />
+            </Box>
           </Box>
         )
       }
@@ -883,8 +1090,8 @@ export const register: Register = on => {
       if (v.screen === 'mode') {
         const row = (
           <Box flexDirection="row" alignItems="center" gap={1}>
-            <Button key="manual" label="Manual" variant="primary" onPress={() => void act($, 'manual')} />
-            <Button key="random" label="Random" variant="primary" onPress={() => void act($, 'random')} />
+            <Button key="manual" label={say('manual', 'Manual')} variant="primary" onPress={() => void act($, 'manual')} />
+            <Button key="random" label={say('random', 'Random')} variant="primary" onPress={() => void act($, 'random')} />
           </Box>
         )
         if (desk) {
@@ -909,7 +1116,7 @@ export const register: Register = on => {
         const shown = pictures.get(v.id)
         const row = (
           <Box flexDirection="row" alignItems="center" gap={1}>
-            <Button key="fight" label="Fight" variant="primary" onPress={() => void act($, 'spun')} />
+            <Button key="fight" label={say('fight', 'Fight')} variant="primary" onPress={() => void act($, 'spun')} />
           </Box>
         )
         if (desk) {
@@ -947,7 +1154,7 @@ export const register: Register = on => {
       if (v.screen === 'over') {
         const row = (
           <Box flexDirection="row" alignItems="center" gap={1}>
-            <Button key="on" label="Continue" variant="primary" onPress={() => void act($, 'open')} />
+            <Button key="on" label={say('continue', 'Continue')} variant="primary" onPress={() => void act($, 'open')} />
           </Box>
         )
         if (desk) {
@@ -997,7 +1204,7 @@ export const register: Register = on => {
           ) : null}
         </Box>
       )
-      const { said, threat } = await read($, flash)
+      const { said, threat, grew } = await read($, flash)
       const told = v.screen === 'battle' ? await read($, news) : ''
       const toldTone = await read($, newsTone)
       const fogged = v.screen === 'battle' || v.screen === 'dice' ? await read($, fog) : ''
@@ -1009,7 +1216,7 @@ export const register: Register = on => {
       const board: BoardProps =
         told && (isNewsLast || !lit)
           ? { columns: boardColumns, text: told, color: BOARD_INK[toldTone], stamp: 0, fade: null }
-          : { columns: boardColumns, text: lit, color: BOARD_INK[threat.startsWith('ORC TOTEM') ? 'totem' : threat ? 'orcs' : 'mana'], stamp: litCount, fade: FLASH }
+          : { columns: boardColumns, text: lit, color: BOARD_INK[grew === 'totem' ? 'totem' : threat ? 'orcs' : 'mana'], stamp: litCount, fade: FLASH }
       if (desk) {
         const top = await read($, cover)
         const still = pictures.get(await read($, stand))

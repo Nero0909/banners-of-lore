@@ -13,6 +13,8 @@ In Claude Desktop, on the Code tab:
 3. Choose **Add plugin** and pick Banners of Lore.
 4. Open a new session and give Claude a task. The game appears above the prompt while Claude works.
 
+The game speaks English and Russian. Pick the language in the title's settings, or run `/banners-of-lore lang ru`.
+
 From a terminal:
 
 ```bash
@@ -29,8 +31,10 @@ claude plugin install banners-of-lore --marketplace Nero0909/banners-of-lore
 - Runs the game core from the `core` folder.
 - Keeps the match in Claude's data.
 - Writes match records to `~/.claude/banners-of-lore/matches` (on Windows, `%USERPROFILE%\.claude\banners-of-lore\matches`).
+- Once a day, reads this repository's `.claude-plugin/plugin.json` from GitHub to learn the newest version. The title then shows it, and a click on it copies the command that updates the mod. Nothing is sent but the request for that file.
+- Opens a link in your browser when you click it on the title.
 
-The hooks make no network calls. The game's sources are not in this repository: `core` holds one compiled file for each system, and the mod picks the one for yours.
+The game's sources are not in this repository: `core` holds one compiled file for each system, and the mod picks the one for yours.
 
 ## Remove
 
@@ -44,7 +48,9 @@ claude plugin uninstall banners-of-lore
 
 Автобатлер над полем ввода Claude: славяне против орков.
 
-В Claude Desktop на вкладке Code нажми `+` у поля ввода, затем **Plugins** и **Add marketplace**. Введи `Nero0909/banners-of-lore`, нажми **Add plugin** и выбери Banners of Lore. Открой новую сессию и дай Claude задачу: игра появится над полем ввода, пока Claude работает.
+В Claude Desktop на вкладке Code нажми `+` у поля ввода, затем **Plugins** и **Add marketplace**. Введи `Nero0909/banners-of-lore`, нажми **Add plugin** и выбери Banners of Lore. Открой новую сессию и дай Claude задачу: игра появится над полем ввода, пока Claude работает. Язык игры выбирается в настройках на титульном экране или командой `/banners-of-lore lang ru`.
+
+Раз в день мод читает с GitHub файл `.claude-plugin/plugin.json` этого репозитория, чтобы узнать номер новой версии, и показывает его на титульном экране.
 
 Работает везде, где есть Claude Desktop: macOS, Windows и Linux. Мод бесплатен для личного некоммерческого использования. Распространять, продавать и менять его нельзя: подробности в [LICENSE](LICENSE).
 
