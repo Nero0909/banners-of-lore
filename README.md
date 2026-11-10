@@ -28,12 +28,14 @@ claude plugin install banners-of-lore --marketplace Nero0909/banners-of-lore
 
 ## What the mod does on your computer
 
-- Runs the game inside Claude: the core is JavaScript in `hooks/core`. It starts no program of its own.
+- Runs the game inside Claude: the core is JavaScript in `hooks/core`. The mod contains no program files.
 - Keeps the match in Claude's data.
-- Writes match records to `~/.claude/banners-of-lore/matches` (on Windows, `%USERPROFILE%\.claude\banners-of-lore\matches`).
+- Writes match records to `~/.claude/banners-of-lore/matches` (on Windows, `%USERPROFILE%\.claude\banners-of-lore\matches`). If it cannot find your home folder, it writes them to `matches` in the mod's own folder.
 - Once a day, reads this repository's `.claude-plugin/plugin.json` from GitHub to learn the newest version. The title then shows it, and a click on it copies the command that updates the mod. Nothing is sent but the request for that file.
-- Opens a link in your browser when you click it on the title.
-- On macOS and Linux, runs `printenv HOME` to find your home folder for the match records.
+- Starts these programs, and no others:
+  - `printenv HOME` on macOS and Linux, to find your home folder for the match records;
+  - your system's link opener (`open`, `xdg-open` or `cmd /c start`), when you click a link on the title;
+  - the program named in the `BANNERS_CORE` environment variable, only if you set it. This is for development: the mod then asks that program instead of its own core.
 
 The game's sources are not in this repository: `hooks/core` holds the game compiled to JavaScript, the same files on every system.
 
@@ -42,7 +44,7 @@ The game's sources are not in this repository: `hooks/core` holds the game compi
 Open **Plugins** in Claude Desktop and remove Banners of Lore, or run:
 
 ```bash
-claude plugin uninstall banners-of-lore
+claude plugin uninstall banners-of-lore@banners-of-lore
 ```
 
 ## По-русски
@@ -53,7 +55,7 @@ claude plugin uninstall banners-of-lore
 
 Раз в день мод читает с GitHub файл `.claude-plugin/plugin.json` этого репозитория, чтобы узнать номер новой версии, и показывает его на титульном экране.
 
-Игра работает внутри Claude: её ядро — JavaScript в папке `hooks/core`, одно на все системы. Своих программ мод не запускает.
+Игра работает внутри Claude: её ядро — JavaScript в папке `hooks/core`, одно на все системы. Программ в моде нет. Сам он запускает только системную команду для ссылок, когда ты кликаешь ссылку, и на macOS и Linux — `printenv HOME`, чтобы найти домашнюю папку для записей партий.
 
 Работает везде, где есть Claude Desktop: macOS, Windows и Linux. Мод бесплатен для личного некоммерческого использования. Распространять, продавать и менять его нельзя: подробности в [LICENSE](LICENSE).
 
