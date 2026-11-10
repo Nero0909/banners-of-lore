@@ -3,8 +3,11 @@
 // price, so all of it is Text and Boxes in whole percents. The names are in the
 // picture: at the band's text sizes they do not fit beside the attack.
 // A plate lights under the pointer and flashes when clicked: a Button has no press
-// of its own, and a Button cannot be coloured. A line with a pack to come counts its
-// seconds down on its portrait's top corner, over how many it holds on the bottom one.
+// of its own, and a Button cannot be coloured. Only what can be bought now stands on a
+// plate; a price short of gold is faded words. A line with a pack to come fills a thin bar
+// under its portrait up to its exit, and how many it holds stands faded on the portrait:
+// gold seconds on every portrait took the eye from what can be bought (the user,
+// 2026-11-09, "слишком яркое и забирает слишком много фокуса", variant Б).
 // The bar hears the time left once per row and counts on by itself.
 import type { ClientModule } from 'claude-code'
 
@@ -24,8 +27,10 @@ const UP_FROM = 0.55
 const UP_ROW = 1
 const FLASH_MS = 220
 const TICK_MS = 250
-// The seconds to a pack's exit: gold, as the time to payday is.
-const CLOCK = '#F4BD60'
+// The bar to a pack's exit, faded as the count, on a dark track, a sixth of a row tall.
+const FILL = '#C9B28C'
+const TRACK = '#2A1D10'
+const BAR_ROWS = 0.15
 // The lesson's wanted line blinks its price gold, two ticks on and two off, till bought
 // (asked 2026-11-07: "draw where to click").
 const BLINK_TICKS = 2
@@ -40,15 +45,29 @@ const wired = new WeakMap<object, Now>()
 // A bay's whole seconds to its pack's exit, 0 with none coming. Time left that changes
 // came with a new row: the count starts from it on this beat.
 function secondsOf(now: Now, b: Bay, i: number): number {
+  const left = leftOf(now, b, i)
+
+  return left > 0 ? Math.ceil(left / 1000) : 0
+}
+
+// A bay's milliseconds to its pack's exit, 0 with none coming.
+function leftOf(now: Now, b: Bay, i: number): number {
   if (b.out === null) {
     return 0
   }
   if (now.since[i]?.out !== b.out) {
     now.since[i] = { out: b.out, beat: now.beats }
   }
-  const left = b.out - (now.beats - (now.since[i]?.beat ?? now.beats)) * TICK_MS
+  return Math.max(0, b.out - (now.beats - (now.since[i]?.beat ?? now.beats)) * TICK_MS)
+}
 
-  return left > 0 ? Math.ceil(left / 1000) : 0
+// How far a bay's pack has come to its exit, in whole percents; none with none coming.
+function filledOf(now: Now, b: Bay, i: number): number | null {
+  const left = leftOf(now, b, i)
+  if (b.out === null || !b.every || left <= 0) {
+    return null
+  }
+  return Math.max(0, Math.min(100, Math.round(100 * (1 - left / b.every))))
 }
 
 const HireClick: ClientModule<HireProps, Lit> = (props, surface) => {
@@ -97,7 +116,7 @@ const HireClick: ClientModule<HireProps, Lit> = (props, surface) => {
     surface.every(TICK_MS, () => {
       now.beats += 1
       const blink = now.bays.some(b => b.wanted) ? Math.floor(now.beats / BLINK_TICKS) % 2 : 0
-      const shown = `${now.bays.map((b, i) => secondsOf(now, b, i)).join(',')}|${blink}`
+      const shown = `${now.bays.map((b, i) => `${secondsOf(now, b, i)}:${filledOf(now, b, i) ?? ''}`).join(',')}|${blink}`
       if (shown !== now.shown) {
         now.shown = shown
         surface.setState({ ...(surface.state ?? lit), tick: now.beats })
@@ -107,12 +126,23 @@ const HireClick: ClientModule<HireProps, Lit> = (props, surface) => {
   const at = wired.get(surface) as Now
   const { Box, Text } = surface.elements
   const isBlinkOn = Math.floor(at.beats / BLINK_TICKS) % 2 === 1
-  const plate = (spot: string, label: string, canBuy: boolean, isWanted = false) => {
+  // A bay with a star holds two prices and the star in the same room: its plates take thin
+  // spaces at their ends and the star sticks to the form's ▲. With plain spaces Leshy's two
+  // read "23…" and "★ ▲ 19…" (the user, 2026-11-09).
+  const plate = (spot: string, label: string, canBuy: boolean, isWanted = false, isTight = false) => {
+    const pad = isTight ? '\u2009' : ' '
     const isFlash = lit.flash === spot || (isWanted && isBlinkOn)
     const fill = isFlash ? PLATE.flash : lit.held === spot ? PLATE.held : !canBuy ? PLATE.off : lit.over === spot ? PLATE.over : PLATE.rest
+    if (!canBuy && !isFlash && lit.held !== spot) {
+      return (
+        <Text size="caption" bold wrap="truncate-end" color={FADED}>
+          {`${pad}${label}${pad}`}
+        </Text>
+      )
+    }
     return (
       <Text size="caption" bold wrap="truncate-end" color={isFlash ? DARK : canBuy ? CREAM : FADED} backgroundColor={fill}>
-        {` ${label} `}
+        {`${pad}${label}${pad}`}
       </Text>
     )
   }
@@ -125,27 +155,27 @@ const HireClick: ClientModule<HireProps, Lit> = (props, surface) => {
           <Box height="76%" flexShrink={0} flexDirection="row">
             <Box width="5%" flexShrink={0} />
             <Box width="92%" flexShrink={0} flexDirection="row" {...(b.lit ? {} : { backgroundColor: VEIL })}>
-              <Box width="25%" flexShrink={0} flexDirection="column" justifyContent="space-between" alignItems="flex-start">
-                {secondsOf(at, b, i) > 0 ? (
-                  <Text size="caption" bold color={DARK} backgroundColor={CLOCK}>
-                    {` ${secondsOf(at, b, i)}s `}
-                  </Text>
-                ) : (
-                  <Box height={0} />
-                )}
+              <Box width="25%" flexShrink={0} flexDirection="column" justifyContent="flex-end" alignItems="flex-start">
                 {b.count > 0 ? (
-                  <Text size="caption" bold color={CREAM} backgroundColor={BADGE}>
+                  <Text size="caption" bold color={FILL} backgroundColor={BADGE}>
                     {` ×${b.count} `}
                   </Text>
                 ) : (
                   <Box height={0} />
                 )}
+                {filledOf(at, b, i) === null ? (
+                  <Box height={BAR_ROWS} />
+                ) : (
+                  <Box width="100%" height={BAR_ROWS} flexShrink={0} flexDirection="row" backgroundColor={TRACK}>
+                    <Box width={`${filledOf(at, b, i)}%`} height="100%" flexShrink={0} backgroundColor={FILL} />
+                  </Box>
+                )}
               </Box>
               <Box width="5%" flexShrink={0} />
               <Box width="68%" flexShrink={0} flexDirection="column" justifyContent="flex-end">
                 <Box flexDirection="row" justifyContent="space-between" alignItems="center" width="100%">
-                  {plate(`${i}:hire`, b.price, b.lit, b.wanted)}
-                  {b.up ? plate(`${i}:up`, `▲ ${b.up.price}`, b.up.lit) : null}
+                  {b.price ? plate(`${i}:hire`, `${b.star ? '★ ' : ''}${b.price}`, b.lit, b.wanted, !!(b.star || b.up?.star)) : <Box height={0} />}
+                  {b.up ? plate(`${i}:up`, `${b.up.star ? '★' : ''}▲ ${b.up.price}`, b.up.lit, false, !!(b.star || b.up.star)) : null}
                 </Box>
                 <Box height="8%" flexShrink={0} />
               </Box>

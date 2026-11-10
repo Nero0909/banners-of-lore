@@ -28,30 +28,14 @@ claude plugin install banners-of-lore --marketplace Nero0909/banners-of-lore
 
 ## What the mod does on your computer
 
-- Runs the game core from the `core` folder.
+- Runs the game inside Claude: the core is JavaScript in `hooks/core`. It starts no program of its own.
 - Keeps the match in Claude's data.
 - Writes match records to `~/.claude/banners-of-lore/matches` (on Windows, `%USERPROFILE%\.claude\banners-of-lore\matches`).
 - Once a day, reads this repository's `.claude-plugin/plugin.json` from GitHub to learn the newest version. The title then shows it, and a click on it copies the command that updates the mod. Nothing is sent but the request for that file.
 - Opens a link in your browser when you click it on the title.
+- On macOS and Linux, runs `printenv HOME` to find your home folder for the match records.
 
-The game's sources are not in this repository: `core` holds one compiled file for each system, and the mod picks the one for yours.
-
-## Check the cores
-
-Below is the SHA-256 of each file in `core`, also in [SHA256SUMS](SHA256SUMS). Hash your copy and compare: a match means the file is the one published here. The VirusTotal link opens that file's page, where antivirus engines report on it. If VirusTotal has not seen the file yet, you can upload your copy there.
-
-Your copy is in `~/.claude/plugins/cache/banners-of-lore/banners-of-lore/<version>/core` (on Windows, `%USERPROFILE%\.claude\plugins\cache\banners-of-lore\banners-of-lore\<version>\core`). Hash a file with `shasum -a 256 <file>` on macOS, `sha256sum <file>` on Linux, or `Get-FileHash <file>` in Windows PowerShell.
-
-<!-- cores:start -->
-| File | SHA-256 | |
-|---|---|---|
-| `banners-of-lore-core-darwin-arm64` | `2cba4ae519f86a605db940571308d483ef228676929731a839efdfe80f9ab61f` | [VirusTotal](https://www.virustotal.com/gui/file/2cba4ae519f86a605db940571308d483ef228676929731a839efdfe80f9ab61f) |
-| `banners-of-lore-core-darwin-x86_64` | `c16adfa031dbdc38a2297fcbb830d7ead8681578cf7c0861b32b3fe3016fe6d1` | [VirusTotal](https://www.virustotal.com/gui/file/c16adfa031dbdc38a2297fcbb830d7ead8681578cf7c0861b32b3fe3016fe6d1) |
-| `banners-of-lore-core-linux-aarch64` | `39dbe29e8fdbf8d4f06dc741447c6bc59e7d345c7e7adc56e04565bdbca4f925` | [VirusTotal](https://www.virustotal.com/gui/file/39dbe29e8fdbf8d4f06dc741447c6bc59e7d345c7e7adc56e04565bdbca4f925) |
-| `banners-of-lore-core-linux-x86_64` | `77c68fa7f6daa83882026dd8e072cee59b08db03f25dd4d3889f0f9fbfbbe104` | [VirusTotal](https://www.virustotal.com/gui/file/77c68fa7f6daa83882026dd8e072cee59b08db03f25dd4d3889f0f9fbfbbe104) |
-| `banners-of-lore-core-windows-aarch64.exe` | `c73a7b24be9206f6bd75ad3c255990f2e24fb38e304e54aee469ed815af82048` | [VirusTotal](https://www.virustotal.com/gui/file/c73a7b24be9206f6bd75ad3c255990f2e24fb38e304e54aee469ed815af82048) |
-| `banners-of-lore-core-windows-x86_64.exe` | `d1d90958ca6a0d90f1713794a643053e02d1b95f38dfc9cb556328ded101f7b8` | [VirusTotal](https://www.virustotal.com/gui/file/d1d90958ca6a0d90f1713794a643053e02d1b95f38dfc9cb556328ded101f7b8) |
-<!-- cores:end -->
+The game's sources are not in this repository: `hooks/core` holds the game compiled to JavaScript, the same files on every system.
 
 ## Remove
 
@@ -69,7 +53,7 @@ claude plugin uninstall banners-of-lore
 
 Раз в день мод читает с GitHub файл `.claude-plugin/plugin.json` этого репозитория, чтобы узнать номер новой версии, и показывает его на титульном экране.
 
-Проверить ядра можно в разделе **Check the cores**: там сумма SHA-256 каждого файла и ссылка на его страницу в VirusTotal. Посчитай сумму своей копии и сравни: если совпала, файл тот же, что опубликован здесь.
+Игра работает внутри Claude: её ядро — JavaScript в папке `hooks/core`, одно на все системы. Своих программ мод не запускает.
 
 Работает везде, где есть Claude Desktop: macOS, Windows и Linux. Мод бесплатен для личного некоммерческого использования. Распространять, продавать и менять его нельзя: подробности в [LICENSE](LICENSE).
 

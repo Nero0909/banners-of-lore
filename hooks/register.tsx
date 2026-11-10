@@ -2,10 +2,11 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, Timer } from 'claude-code'
 
 import type { Answer, Art, Base, Bay, BoardProps, Choice, CornerProps, DraftProps, Flash, HireProps, Picture, Row, Stored, TitleProps, Tone, View, Work } from '../types'
+import * as core from './core/core.js'
 
-// The band above the prompt while Claude works. The game itself is a binary of its
-// own, a process a request: this holds the Buttons, the clock and the pictures the
-// binary draws, and hands back a state it never reads.
+// The band above the prompt while Claude works. The game itself is the core, the Rust
+// game built to JavaScript (sim/jscore), a request a call: this holds the Buttons, the
+// clock and the pictures the core draws, and hands back a state it never reads.
 
 const COMMAND = 'banners-of-lore'
 const STORE_KEY = 'army'
@@ -16,6 +17,9 @@ const LESSON_KEY = 'lesson'
 const LANG_KEY = 'lang'
 // The languages the core speaks, and their names in themselves.
 const LANGS: Record<string, string> = { en: 'English', ru: 'Русский' }
+// The level the player picked, one for all sessions; a new match takes it (data::LEVELS).
+const LEVEL_KEY = 'level'
+const HINTS_KEY = 'hints'
 // The newest version out, and when it was read: the published manifest, once a day.
 const LATEST_KEY = 'latest'
 const LATEST_URL = 'https://raw.githubusercontent.com/Nero0909/banners-of-lore/main/.claude-plugin/plugin.json'
@@ -95,9 +99,9 @@ const fog = atom({ plugin: 'banners-of-lore', key: 'fog' } as const, '')
 // The scholar cat and his words over the field in the lesson: a plain picture a step,
 // which the scene's rows put up and take down on time.
 const cat = atom({ plugin: 'banners-of-lore', key: 'cat' } as const, '')
-// Why the band has no game to show, when the binary did not answer.
+// Why the band has no game to show, when the core did not answer.
 const failure = atom({ plugin: 'banners-of-lore', key: 'failure' } as const, '')
-// The game as the binary last left it, at the running scene's start.
+// The game as the core last left it, at the running scene's start.
 const state = atom({ plugin: 'banners-of-lore', key: 'state' } as const, '')
 const view = atom({ plugin: 'banners-of-lore', key: 'view' } as const, TITLE, { shape: SHAPE })
 // The scene before, drawn over the new one while it loads.
@@ -124,7 +128,6 @@ let isShown = false
 let isTurnOver = false
 let art: Art | null = null
 let bar = ''
-let binary = ''
 let matches = ''
 // A build run from the dev folder says so in the corner: the release ships no sim/
 // (release.sh), so the stand's sources mark the dev build. The user took one for the
@@ -136,6 +139,10 @@ const DEV_COLUMNS = 4
 const pictures = new Map<number, Picture>()
 // The language asked for, read from the store once; empty is English.
 let lang: string | null = null
+// The level asked for, read from the store once; empty is the middle one.
+let level: string | null = null
+// Whether the hints show, read from the store once: "off" hides them, else they show.
+let hints: string | null = null
 // This build's version and home page, from its own manifest, and the newest version out.
 let version = ''
 let homepage = ''
@@ -147,6 +154,36 @@ let words: Record<string, string> = {}
 // test of the core holds equal to mod/localization/en.json under hook.<key>.
 export function say(key: string, english: string, args: Record<string, string | number> = {}): string {
   return Object.entries(args).reduce((text, [name, value]) => text.split(`{${name}}`).join(String(value)), words[key] ?? english)
+}
+
+async function levelOf($: EngineInterface): Promise<string> {
+  if (level === null) {
+    const stored = await $.store.get(LEVEL_KEY).catch(() => undefined)
+    level = typeof stored === 'string' ? stored : ''
+  }
+
+  return level
+}
+
+// The level, for all sessions: the next match takes it, the one on its way keeps its own.
+async function setLevel($: EngineInterface, code: string): Promise<void> {
+  await $.store.set(LEVEL_KEY, code)
+  level = code
+}
+
+async function hintsOf($: EngineInterface): Promise<string> {
+  if (hints === null) {
+    const stored = await $.store.get(HINTS_KEY).catch(() => undefined)
+    hints = typeof stored === 'string' ? stored : ''
+  }
+
+  return hints
+}
+
+// The hints on or off, for all sessions, at once: the next scene draws them or not.
+async function setHints($: EngineInterface, code: string): Promise<void> {
+  await $.store.set(HINTS_KEY, code)
+  hints = code
 }
 
 async function langOf($: EngineInterface): Promise<string> {
@@ -170,64 +207,34 @@ function serial($: EngineInterface, work: () => Promise<void>): Promise<void> {
   return run
 }
 
-// Every core's file name starts so: banners-of-lore-core-<system>-<machine>.
-const CORE = 'banners-of-lore-core-'
-
-// The binary for this machine, once one has answered. A mod carries one for each
-// system Claude Desktop runs on: darwin-arm64, darwin-x86_64, linux-x86_64,
-// linux-aarch64, windows-x86_64.exe and windows-aarch64.exe (2026-11-08). Windows is
-// told by OS=Windows_NT and its processor by PROCESSOR_ARCHITECTURE, not by uname:
-// Git Bash puts a uname there that answers MINGW64_NT-10.0 x86_64. The guess goes
-// first, then the other cores of its system, then the rest, should a system name the
-// guess wrongly: Windows on ARM runs the x86_64 core too.
-async function coresFor($: EngineInterface): Promise<string[]> {
-  if (binary) {
-    return [binary]
-  }
-  const os = await $.env.get('OS').catch(() => undefined)
-  const cpu = os === 'Windows_NT' ? await $.env.get('PROCESSOR_ARCHITECTURE').catch(() => undefined) : undefined
-  const { stdout } = os === 'Windows_NT' ? { stdout: '' } : await $.process.run(['uname', '-sm']).catch(() => ({ stdout: '' }))
-  const guess = coreName(os, stdout, cpu)
-  const systemOf = (name: string) => name.slice(CORE.length).split('-')[0]
-  const folder = await $.fs.list(`${$.plugin.root}/core`).catch(() => [])
-  const others = folder.map(f => f.name).filter(n => n.startsWith(CORE) && n !== guess && !n.endsWith('.new'))
-    .sort((x, y) => Number(systemOf(y) === systemOf(guess)) - Number(systemOf(x) === systemOf(guess)))
-
-  return [guess, ...others].map(n => `${$.plugin.root}/core/${n}`)
+// The core answers here, in the hooks' worker: no process and no file of its own to
+// start. The native cores this mod ran before, one a system, Windows' Smart App Control
+// refused, as no one had signed them (2026-11-10); the engine has no WebAssembly and no
+// eval, so the core comes as JavaScript modules (run.sh, jscore).
+const encoder = new TextEncoder()
+const decoder = new TextDecoder()
+function jsCore(input: string): string {
+  const bytes = encoder.encode(input)
+  const at = core.alloc(bytes.length)
+  new Uint8Array(core.memory.buffer, at, bytes.length).set(bytes)
+  const length = core.answer(at, bytes.length)
+  return decoder.decode(new Uint8Array(core.memory.buffer, core.out_ptr(), length).slice())
 }
-
-// Runs a request with each core in turn until one answers. A core built for another
-// system cannot start here: the run rejects or exits at once, and the next is tried.
-// None answering, the first one's failure stands.
-export async function firstAnswer<R extends { exitCode: number }>(paths: readonly string[], run: (path: string) => Promise<R>): Promise<{ path: string; result: R }> {
-  let first: { result?: R; error?: unknown } | undefined
-  for (const path of paths) {
-    try {
-      const result = await run(path)
-      if (result.exitCode === 0) {
-        return { path, result }
-      }
-      first ??= { result }
-    } catch (error) {
-      first ??= { error }
-    }
+// A core to run as a process instead, by its path in BANNERS_CORE: the band's tests
+// answer through it, as the engine keeps this module apart from their own import of
+// it, and a native build (sim/src/bin/core.rs) can stand in to debug. Unset, the
+// JavaScript core answers.
+async function runCore($: EngineInterface, input: string): Promise<string> {
+  const standIn = await $.env.get('BANNERS_CORE').catch(() => undefined)
+  if (!standIn) {
+    return jsCore(input)
   }
-  if (!first?.result) {
-    throw first?.error ?? new Error('no core for this system')
+  const { exitCode, stdout, stderr } = await $.process.run([standIn], { stdin: input, timeoutMs: 8000 })
+  if (exitCode !== 0) {
+    throw new Error(`the game stopped: ${stderr.slice(0, 160)}`)
   }
 
-  return { path: '', result: first.result }
-}
-
-// The core's file name from the OS variable, what `uname -sm` answered and, on
-// Windows, PROCESSOR_ARCHITECTURE (AMD64 or ARM64).
-export function coreName(os: string | undefined, uname: string, cpu?: string): string {
-  const [system = '', machine = ''] = uname.trim().toLowerCase().split(/\s+/)
-  if (os === 'Windows_NT' || /^(mingw|msys|cygwin|windows)/.test(system)) {
-    return `${CORE}windows-${/^(arm64|aarch64)$/i.test(cpu ?? machine) ? 'aarch64' : 'x86_64'}.exe`
-  }
-
-  return `${CORE}${system}-${machine}`
+  return stdout
 }
 
 // Where matches are kept: ~/.claude/banners-of-lore/matches, whether the mod runs from
@@ -331,15 +338,13 @@ async function setLang($: EngineInterface, code: string): Promise<void> {
 async function ask($: EngineInterface, op: string, arg = ''): Promise<Answer & Partial<Art>> {
   const v = await read($, view)
   const elapsed = Math.min(v.steps, Math.max(0, Math.round(((await $.clock.now()) - v.at) / STEP_MS)))
-  const input = JSON.stringify({ op, arg, state: await read($, state), elapsed, seed: Math.floor(await $.clock.now()) % 4294967296, lang: await langOf($), ...front(), ...(await read($, progress)) })
-  const { path, result } = await firstAnswer(await coresFor($), p => $.process.run([p], { stdin: input, timeoutMs: 8000 }))
-  binary ||= path
-  const { exitCode, stdout, stderr } = result
-  if (exitCode !== 0) {
-    throw new Error(`the game stopped: ${stderr.slice(0, 160)}`)
+  const input = JSON.stringify({ op, arg, state: await read($, state), elapsed, seed: Math.floor(await $.clock.now()) % 4294967296, lang: await langOf($), level: await levelOf($), hints: await hintsOf($), ...front(), ...(await read($, progress)) })
+  const reply = JSON.parse(await runCore($, input)) as Answer & Partial<Art> & { error?: string }
+  if (reply.error) {
+    throw new Error(`the game stopped: ${reply.error.slice(0, 160)}`)
   }
 
-  return JSON.parse(stdout) as Answer & Partial<Art>
+  return reply
 }
 
 // Each session keeps its game under a key of its own, and STORE_KEY the last game played
@@ -640,7 +645,7 @@ async function redraw($: EngineInterface): Promise<void> {
   await $.ui.invalidate('ui.render')
 }
 
-// The binary's pictures that never change, and the game as stored.
+// The core's pictures that never change, and the game as stored.
 async function wake($: EngineInterface): Promise<void> {
   if (!version) {
     await readManifest($)
@@ -811,6 +816,12 @@ export const register: Register = on => {
       if (v.screen === 'settings') {
         if (key.startsWith('lang:')) {
           await setLang($, key.slice(5))
+        } else if (key.startsWith('level:')) {
+          await setLevel($, key.slice(6))
+          await act($, 'settings')
+        } else if (key.startsWith('hints:')) {
+          await setHints($, key.slice(6))
+          await act($, 'settings')
         } else if (key === 'back') {
           await act($, 'open')
         }
@@ -819,7 +830,15 @@ export const register: Register = on => {
     }
     if (e.element === 'over-click') {
       if (v.screen === 'over') {
-        await act($, 'open')
+        // The plate of another level starts a match on it; a click elsewhere goes on.
+        const { key = '' } = (e.data ?? {}) as { key?: string }
+        const [kind, to] = key.split(':')
+        if ((kind === 'harder' || kind === 'easier') && to) {
+          await setLevel($, to)
+          await act($, 'new')
+        } else {
+          await act($, 'open')
+        }
       }
       return {}
     }
@@ -856,7 +875,13 @@ export const register: Register = on => {
       const { hire, forms } = await read($, buttons)
       const hired = hire[bay]
       const choice = isUp ? forms.find(f => f.key.split(':')[1] === hired?.key.split(':')[1]) : hired
-      if (v.screen === 'battle' && choice) {
+      // The free place again, over its own choice: back to the battle.
+      if (v.screen === 'dice' && choice?.key === 'slot') {
+        await act($, 'next')
+        return {}
+      }
+      // A shut place waits for the one before it.
+      if (v.screen === 'battle' && choice && choice.key !== 'locked') {
         await press($, choice.key)
       }
       return {}
@@ -867,10 +892,12 @@ export const register: Register = on => {
       await update($, flash, () => ({ said: '', threat: '' }))
       return {}
     }
-    // Read or not, a click on the die's turn goes back to the battle.
+    // Read or not, a click on the die's turn goes back to the battle. Over a free place's
+    // choice a card opens its line, and a click beside them goes back the same.
     if (e.element === 'roll-click') {
       if (v.screen === 'dice') {
-        await act($, 'next')
+        const { key = '' } = (e.data ?? {}) as { key?: string }
+        await (key.startsWith('take:') ? press($, key) : act($, 'next'))
       }
       return {}
     }
@@ -894,7 +921,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (!e.agentId) {
       isTurnOver = false
-      // A new binary reloads nothing here, and the old backdrop stayed on (seen
+      // A new core reloads nothing here, and the old backdrop stayed on (seen
       // 2026-10-31): each turn takes the pictures afresh.
       await ask($, 'art').then(
         a => {
@@ -1055,6 +1082,18 @@ export const register: Register = on => {
               {Object.entries(LANGS).map(([code, name]) => (
                 <Button key={`lang:${code}`} label={name} variant={code === ((lang ?? '') || 'en') ? 'primary' : 'secondary'} onPress={() => void setLang($, code)} />
               ))}
+              {v.zones
+                .filter(z => z.key.startsWith('level:'))
+                .map(z => z.key.slice(6))
+                .map(code => (
+                  <Button key={`level:${code}`} label={{ easy: say('easy', 'Easy'), normal: say('normal', 'Normal'), hard: say('hard', 'Hard') }[code] ?? code} variant={code === ((level ?? '') || 'normal') ? 'primary' : 'secondary'} onPress={() => void setLevel($, code).then(() => act($, 'settings'))} />
+                ))}
+              {v.zones
+                .filter(z => z.key.startsWith('hints:'))
+                .map(z => z.key.slice(6))
+                .map(code => (
+                  <Button key={`hints:${code}`} label={code === 'off' ? say('off', 'Off') : say('on', 'On')} variant={code === ((hints ?? '') === 'off' ? 'off' : 'on') ? 'primary' : 'secondary'} onPress={() => void setHints($, code).then(() => act($, 'settings'))} />
+                ))}
               <Button key="back" label={say('back', 'Back')} variant="secondary" onPress={() => void act($, 'open')} />
             </Box>
           </Box>
@@ -1152,16 +1191,18 @@ export const register: Register = on => {
         )
       }
       if (v.screen === 'over') {
+        const [kind = '', to = ''] = (v.zones.find(z => z.key.startsWith('harder:') || z.key.startsWith('easier:'))?.key ?? '').split(':')
         const row = (
           <Box flexDirection="row" alignItems="center" gap={1}>
             <Button key="on" label={say('continue', 'Continue')} variant="primary" onPress={() => void act($, 'open')} />
+            {to ? <Button key="level" label={kind === 'harder' ? say('harder', 'Harder') : say('easier', 'Easier')} variant="secondary" onPress={() => void setLevel($, to).then(() => act($, 'new'))} /> : null}
           </Box>
         )
         if (desk) {
           return (
             <Box flexDirection="column" width={e.props.bodyColumns}>
               {topRow(blank)}
-              {field('over', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="over-click" module="./title-client.tsx" props={size} width={e.props.bodyColumns} height={rows} />)}
+              {field('over', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="over-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width={e.props.bodyColumns} height={rows} />)}
             </Box>
           )
         }
@@ -1185,17 +1226,27 @@ export const register: Register = on => {
       const isRolling = v.screen === 'dice'
       const choice = (c: Choice) =>
         c.lit && !isRolling ? (
-          <Button key={c.key} label={c.label} onPress={() => void press($, c.key)} />
+          <Button key={c.key} label={`${c.star ? '★ ' : ''}${c.label}`} onPress={() => void press($, c.key)} />
         ) : (
-          <Button key={c.key} label={c.label} variant="secondary" dimColor onPress={() => void (isRolling ? undefined : press($, c.key))} />
+          <Button key={c.key} label={`${c.star ? '★ ' : ''}${c.label}`} variant="secondary" dimColor onPress={() => void (isRolling ? undefined : press($, c.key))} />
         )
       // Spacing flows from the parent: rows of Buttons with none overlapped, a Button
       // standing taller than its row (seen 2026-10-31). No hotkey: a bare digit typed
       // into an empty prompt would press it.
+      // A free place's choice in text: a Button a line, by the names the core gave in order.
+      const names = v.alt.split(' · ')
+      const takes = isRolling ? v.zones.filter(z => z.key.startsWith('take:')) : []
       const controls = (
         <Box flexDirection="column" gap={1} width="100%">
+          {takes.length > 0 ? (
+            <Box flexDirection="row" alignItems="center" flexWrap="wrap" gap={1}>
+              {takes.map((z, i) => (
+                <Button key={z.key} label={`${say('place', 'Place')}: ${names[i] ?? z.key.slice(5)}`} onPress={() => void press($, z.key)} />
+              ))}
+            </Box>
+          ) : null}
           <Box flexDirection="row" alignItems="center" flexWrap="wrap" gap={1}>
-            {held.hire.map(choice)}
+            {held.hire.filter(c => c.key !== 'locked').map(choice)}
           </Box>
           {held.forms.length > 0 ? (
             <Box flexDirection="row" alignItems="center" flexWrap="wrap" gap={1}>
@@ -1242,7 +1293,7 @@ export const register: Register = on => {
         const rolled = isRolling ? pictures.get(v.id) : undefined
         const bays: Bay[] = held.hire.map(c => {
           const up = held.forms.find(f => f.key.split(':')[1] === c.key.split(':')[1])
-          return { price: c.price ?? '', count: c.count ?? 0, lit: c.lit && !isRolling, up: up ? { price: up.price ?? '', lit: up.lit && !isRolling } : null, out: c.out === null || c.out === undefined || isRolling ? null : c.out * STEP_MS, wanted: (c.wanted ?? false) && !isRolling }
+          return { price: c.price ?? '', count: c.count ?? 0, lit: c.lit && !isRolling, star: (c.star ?? false) && !isRolling, up: up ? { price: up.price ?? '', lit: up.lit && !isRolling, star: (up.star ?? false) && !isRolling } : null, out: c.out === null || c.out === undefined || isRolling ? null : c.out * STEP_MS, every: c.every ? c.every * STEP_MS : null, wanted: (c.wanted ?? false) && !isRolling }
         })
         const hireBar = (
           <Box key="hire-bar" position="relative" flexDirection="column" width="100%" marginTop={BAR_LIFT}>
@@ -1283,7 +1334,7 @@ export const register: Register = on => {
               )}
               {rolled ? (
                 <Box key="roll-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
-                  <desk.Client key="roll-click" module="./title-client.tsx" props={size} width={e.props.bodyColumns} height={rows} />
+                  <desk.Client key="roll-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width={e.props.bodyColumns} height={rows} />
                 </Box>
               ) : null}
             </Box>

@@ -3,7 +3,7 @@
 
 // A Button as the core wants it: what a press asks for, and whether gold covers it.
 // wanted: the line the lesson waits to be bought; its price blinks.
-export type Choice = { key: string; label: string; price?: string; count?: number; out?: number | null; lit: boolean; wanted?: boolean }
+export type Choice = { key: string; label: string; price?: string; count?: number; out?: number | null; every?: number; lit: boolean; wanted?: boolean; star?: boolean }
 
 // The Buttons of one stretch of a scene.
 // What a piece of news touches: the board colours it as the status line's column.
@@ -96,7 +96,7 @@ export type DraftProps = { columns: number; rows: number; cards: number }
 
 // What the clear layer over the hire bar shows: each bay's price, how many the line
 // holds, and its upgrade's price.
-export type Bay = { price: string; count: number; lit: boolean; up: { price: string; lit: boolean } | null; out: number | null; wanted?: boolean }
+export type Bay = { price: string; count: number; lit: boolean; up: { price: string; lit: boolean; star?: boolean } | null; out: number | null; every?: number | null; wanted?: boolean; star?: boolean }
 export type HireProps = { columns: number; bays: Bay[] }
 
 // The plates in the band's corner: what a click on each asks for.
