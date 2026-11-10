@@ -16,7 +16,7 @@ const PointClick: ClientModule<TitleProps> = (props, surface) => {
     wired.set(surface, now)
     surface.onPointer(e => {
       if (e.type === 'up' && (e.button ?? 'left') === 'left') {
-        const x = (e.fine?.x ?? e.x + 0.5) / Math.max(1, now.columns)
+        const x = (e.fine?.x ?? e.x + 0.5) / Math.max(1, surface.columns || now.columns)
         const y = (e.fine?.y ?? e.y + 0.5) / Math.max(1, now.rows)
         surface.post({ x, y })
       }
@@ -24,7 +24,7 @@ const PointClick: ClientModule<TitleProps> = (props, surface) => {
   }
   const { Box } = surface.elements
 
-  return <Box width={Math.max(1, props.columns)} height={Math.max(1, props.rows)} />
+  return <Box width="100%" height={Math.max(1, props.rows)} />
 }
 
 export default PointClick

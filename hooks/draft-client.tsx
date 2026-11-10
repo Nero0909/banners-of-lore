@@ -16,13 +16,13 @@ const DraftClick: ClientModule<DraftProps> = (props, surface) => {
     wired.set(surface, now)
     surface.onPointer(e => {
       if (e.type === 'up' && (e.button ?? 'left') === 'left') {
-        surface.post({ card: Math.min(now.cards - 1, Math.floor((e.x / Math.max(1, now.columns)) * now.cards)) })
+        surface.post({ card: Math.min(now.cards - 1, Math.floor(((e.x + 0.5) / Math.max(1, surface.columns || now.columns)) * now.cards)) })
       }
     })
   }
   const { Box } = surface.elements
 
-  return <Box width={Math.max(1, props.columns)} height={Math.max(1, props.rows)} />
+  return <Box width="100%" height={Math.max(1, props.rows)} />
 }
 
 export default DraftClick

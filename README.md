@@ -13,7 +13,7 @@ In Claude Desktop, on the Code tab:
 3. Choose **Add plugin** and pick Banners of Lore.
 4. Open a new session and give Claude a task. The game appears above the prompt while Claude works.
 
-The game speaks English and Russian. Pick the language in the title's settings, or run `/banners-of-lore lang ru`.
+The game speaks English and Russian. Pick the language in the title's settings.
 
 From a terminal:
 
@@ -34,8 +34,7 @@ claude plugin install banners-of-lore --marketplace Nero0909/banners-of-lore
 - Once a day, reads this repository's `.claude-plugin/plugin.json` from GitHub to learn the newest version. The title then shows it, and a click on it copies the command that updates the mod. Nothing is sent but the request for that file.
 - Starts these programs, and no others:
   - `printenv HOME` on macOS and Linux, to find your home folder for the match records;
-  - your system's link opener (`open`, `xdg-open` or `cmd /c start`), when you click a link on the title;
-  - the program named in the `BANNERS_CORE` environment variable, only if you set it. This is for development: the mod then asks that program instead of its own core.
+  - your system's link opener (`open`, `xdg-open` or `cmd /c start`), when you click a link on the title.
 
 The game's sources are not in this repository: `hooks/core` holds the game compiled to JavaScript, the same files on every system.
 
@@ -51,7 +50,7 @@ claude plugin uninstall banners-of-lore@banners-of-lore
 
 Автобатлер над полем ввода Claude: славяне против орков.
 
-В Claude Desktop на вкладке Code нажми `+` у поля ввода, затем **Plugins** и **Add marketplace**. Введи `Nero0909/banners-of-lore`, нажми **Add plugin** и выбери Banners of Lore. Открой новую сессию и дай Claude задачу: игра появится над полем ввода, пока Claude работает. Язык игры выбирается в настройках на титульном экране или командой `/banners-of-lore lang ru`.
+В Claude Desktop на вкладке Code нажми `+` у поля ввода, затем **Plugins** и **Add marketplace**. Введи `Nero0909/banners-of-lore`, нажми **Add plugin** и выбери Banners of Lore. Открой новую сессию и дай Claude задачу: игра появится над полем ввода, пока Claude работает. Язык игры выбирается в настройках на титульном экране.
 
 Раз в день мод читает с GitHub файл `.claude-plugin/plugin.json` этого репозитория, чтобы узнать номер новой версии, и показывает его на титульном экране.
 

@@ -71,7 +71,7 @@ const TitleClick: ClientModule<TitleProps, Lit> = (props, surface) => {
   const lightOf = (key: string) => (lit.flash === key ? LIGHT.flash : lit.held === key ? LIGHT.held : lit.over === key ? LIGHT.over : undefined)
 
   return (
-    <Box position="relative" flexDirection="column" width={Math.max(1, props.columns)} height={Math.max(1, props.rows)}>
+    <Box position="relative" flexDirection="column" width="100%" height={Math.max(1, props.rows)}>
       {(props.zones ?? []).map(z => {
         const light = lightOf(z.key)
         return light ? (

@@ -129,10 +129,17 @@ let isTurnOver = false
 let art: Art | null = null
 let bar = ''
 let matches = ''
-// A build run from the dev folder says so in the corner: the release ships no sim/
-// (release.sh), so the stand's sources mark the dev build. The user took one for the
-// other (2026-11-03).
-let isDev = false
+// A build run from the dev folder: the release ships no sim/ (release.sh), so the
+// stand's sources mark the dev build. It says so in the corner (the user took one for
+// the other, 2026-11-03), and it alone takes the tools for development: BANNERS_CORE
+// and the slash command, test, card, victory and defeated among its words. A player
+// picks the language and the lesson on the title. The user wants none of them in the
+// release (2026-11-10).
+let isDev: boolean | null = null
+async function devBuild($: EngineInterface): Promise<boolean> {
+  isDev ??= await $.fs.exists(`${$.plugin.root}/sim/Cargo.toml`).catch(() => false)
+  return isDev
+}
 // The first start of a player who never had the lesson and has no game saved goes to it.
 let isLessonDue = false
 const DEV_COLUMNS = 4
@@ -222,10 +229,10 @@ function jsCore(input: string): string {
 }
 // A core to run as a process instead, by its path in BANNERS_CORE: the band's tests
 // answer through it, as the engine keeps this module apart from their own import of
-// it, and a native build (sim/src/bin/core.rs) can stand in to debug. Unset, the
-// JavaScript core answers.
+// it, and a native build (sim/src/bin/core.rs) can stand in to debug. The dev build
+// alone reads it; unset, or in the release, the JavaScript core answers.
 async function runCore($: EngineInterface, input: string): Promise<string> {
-  const standIn = await $.env.get('BANNERS_CORE').catch(() => undefined)
+  const standIn = (await devBuild($)) ? await $.env.get('BANNERS_CORE').catch(() => undefined) : undefined
   if (!standIn) {
     return jsCore(input)
   }
@@ -694,16 +701,27 @@ async function wake($: EngineInterface): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    // A failure the hooks before a reload left in the session's state would stand over
+    // the band for good: only a scene drawn clears it, and a failure draws none. The old
+    // hooks lost their native core to the JavaScript one and said so after the reload
+    // (2026-11-10).
+    await update($, failure, () => '')
+    const dev = await devBuild($)
     await serial($, () => wake($))
-    await $.command.register({ name: COMMAND, description: say('command', '"lesson" plays the short battle the cat leads, "lang" picks the language, "test" fields one of each line, "card" plays the next card of the deck') })
+    if (dev) {
+      await $.command.register({ name: COMMAND, description: say('command', '"lang" picks the language, "lesson" plays the lesson, "test" fields one of each line, "card" plays the next card of the deck, "victory" and "defeated" show how a match ends') })
+    }
     beat?.cancel()
     beat = $.clock.every(BEAT_MS, () => void look($))
-    isDev = await $.fs.exists(`${$.plugin.root}/sim/Cargo.toml`).catch(() => false)
 
     return next(e)
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => {
+    // The release registers no command; this answers none there either.
+    if (!(await devBuild($))) {
+      return { text: '' }
+    }
     // A test field, shown whether or not Claude works.
     if (e.args.trim() === 'test') {
       await act($, 'test')
@@ -1049,8 +1067,11 @@ export const register: Register = on => {
         if (desk) {
           return (
             <Box flexDirection="column" width={e.props.bodyColumns}>
+              {/* As wide as the picture: on a wide band the clear layers ran past it, and every click landed off its plate; it stands in the middle (the user, 2026-11-10). */}
+              <Box flexDirection="column" alignSelf="center">
               {topRow(blank)}
-              {field('title', pictures.get(v.id)?.layers[0] ?? art?.title ?? '', <desk.Client key="title-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width={e.props.bodyColumns} height={rows} />)}
+              {field('title', pictures.get(v.id)?.layers[0] ?? art?.title ?? '', <desk.Client key="title-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width="100%" height={rows} />)}
+              </Box>
             </Box>
           )
         }
@@ -1070,8 +1091,11 @@ export const register: Register = on => {
         if (desk) {
           return (
             <Box flexDirection="column" width={e.props.bodyColumns}>
+              {/* As wide as the picture: on a wide band the clear layers ran past it, and every click landed off its plate; it stands in the middle (the user, 2026-11-10). */}
+              <Box flexDirection="column" alignSelf="center">
               {topRow(blank)}
-              {field('settings', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="settings-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width={e.props.bodyColumns} height={rows} />)}
+              {field('settings', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="settings-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width="100%" height={rows} />)}
+              </Box>
             </Box>
           )
         }
@@ -1110,8 +1134,11 @@ export const register: Register = on => {
         if (desk) {
           return (
             <Box flexDirection="column" width={e.props.bodyColumns}>
+              {/* As wide as the picture: on a wide band the clear layers ran past it, and every click landed off its plate; it stands in the middle (the user, 2026-11-10). */}
+              <Box flexDirection="column" alignSelf="center">
               {topRow(blank)}
-              {field('draft', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="draft-click" module="./draft-client.tsx" props={{ ...size, cards: 3 } satisfies DraftProps} width={e.props.bodyColumns} height={rows} />)}
+              {field('draft', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="draft-click" module="./draft-client.tsx" props={{ ...size, cards: 3 } satisfies DraftProps} width="100%" height={rows} />)}
+              </Box>
             </Box>
           )
         }
@@ -1136,8 +1163,11 @@ export const register: Register = on => {
         if (desk) {
           return (
             <Box flexDirection="column" width={e.props.bodyColumns}>
+              {/* As wide as the picture: on a wide band the clear layers ran past it, and every click landed off its plate; it stands in the middle (the user, 2026-11-10). */}
+              <Box flexDirection="column" alignSelf="center">
               {topRow(blank)}
-              {field('mode', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="mode-click" module="./draft-client.tsx" props={{ ...size, cards: 2 } satisfies DraftProps} width={e.props.bodyColumns} height={rows} />)}
+              {field('mode', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="mode-click" module="./draft-client.tsx" props={{ ...size, cards: 2 } satisfies DraftProps} width="100%" height={rows} />)}
+              </Box>
             </Box>
           )
         }
@@ -1161,6 +1191,8 @@ export const register: Register = on => {
         if (desk) {
           return (
             <Box flexDirection="column" width={e.props.bodyColumns}>
+              {/* As wide as the picture: on a wide band the clear layers ran past it, and every click landed off its plate; it stands in the middle (the user, 2026-11-10). */}
+              <Box flexDirection="column" alignSelf="center">
               {topRow(blank)}
               <Box position="relative" flexDirection="column" width="100%">
                 <Box key="backdrop" flexDirection="column" width="100%">
@@ -1174,8 +1206,9 @@ export const register: Register = on => {
                   <desk.Svg source={shown?.layers[1] ?? ''} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} isInteractive={v.reveal > 0} />
                 </Box>
                 <Box key="spin-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
-                  <desk.Client key="spin-click" module="./title-client.tsx" props={size} width={e.props.bodyColumns} height={rows} />
+                  <desk.Client key="spin-click" module="./title-client.tsx" props={size} width="100%" height={rows} />
                 </Box>
+              </Box>
               </Box>
             </Box>
           )
@@ -1201,8 +1234,11 @@ export const register: Register = on => {
         if (desk) {
           return (
             <Box flexDirection="column" width={e.props.bodyColumns}>
+              {/* As wide as the picture: on a wide band the clear layers ran past it, and every click landed off its plate; it stands in the middle (the user, 2026-11-10). */}
+              <Box flexDirection="column" alignSelf="center">
               {topRow(blank)}
-              {field('over', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="over-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width={e.props.bodyColumns} height={rows} />)}
+              {field('over', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="over-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width="100%" height={rows} />)}
+              </Box>
             </Box>
           )
         }
@@ -1299,12 +1335,14 @@ export const register: Register = on => {
           <Box key="hire-bar" position="relative" flexDirection="column" width="100%" marginTop={BAR_LIFT}>
             <desk.Svg source={bar} alt={NO_TIP} width={BAR_PX.width} height={BAR_PX.height} />
             <Box key="hire-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
-              <desk.Client key="hire-click" module="./hire-client.tsx" props={{ columns: e.props.bodyColumns, bays } satisfies HireProps} width={e.props.bodyColumns} />
+              <desk.Client key="hire-click" module="./hire-client.tsx" props={{ columns: e.props.bodyColumns, bays } satisfies HireProps} width="100%" />
             </Box>
           </Box>
         )
         return (
           <Box flexDirection="column" width={e.props.bodyColumns}>
+            {/* As wide as the picture: on a wide band the clear layers ran past it, and every click landed off its plate; it stands in the middle (the user, 2026-11-10). */}
+            <Box flexDirection="column" alignSelf="center">
             {/* Always drawn, so the field does not jump as the row comes and goes. */}
             {topRow(
               // In the row's flow: laid over a box with nothing else in it, the words took
@@ -1329,18 +1367,19 @@ export const register: Register = on => {
               </Box>
               {rolled ? null : (
                 <Box key="scene-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
-                  <desk.Client key="scene-click" module="./point-client.tsx" props={size} width={e.props.bodyColumns} height={rows} />
+                  <desk.Client key="scene-click" module="./point-client.tsx" props={size} width="100%" height={rows} />
                 </Box>
               )}
               {rolled ? (
                 <Box key="roll-click" position="absolute" top={0} left={0} flexDirection="column" width="100%">
-                  <desk.Client key="roll-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width={e.props.bodyColumns} height={rows} />
+                  <desk.Client key="roll-click" module="./title-client.tsx" props={{ ...size, zones: v.zones } satisfies TitleProps} width="100%" height={rows} />
                 </Box>
               ) : null}
             </Box>
             {bar ? hireBar : controls}
             {/* A Button stands taller than its row: the last would be cut off. */}
             {bar ? null : <Box key="room" height={1} />}
+            </Box>
           </Box>
         )
       }
