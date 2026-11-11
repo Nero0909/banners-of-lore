@@ -32,6 +32,9 @@ const DISCORD_URL = ''
 // games of those seen longest ago go.
 const KEEP_GAMES = 20
 const STEP_MS = 100
+// How long before a scene ends the band asks for the next payday's: the core's first scene
+// after a load took 820 ms.
+const EARLY_MS = 1500
 const ROWS = 9
 // Both layers of the desktop field at one size, in CSS pixels: an image and an
 // interactive frame size an Svg differently (seen on 2026-10-30), so the layers
@@ -114,6 +117,13 @@ const progress = atom({ plugin: 'banners-of-lore', key: 'progress' } as const, N
 // What a reload may lose: the timers, the pictures, and the queue that keeps
 // requests in order. The next drawing starts them again.
 let timer: Timer | null = null
+// How long the core takes to answer, smoothed: the scene it hands back starts where the last
+// one will stand by the time it shows, not where it stood when asked. Since the core runs as
+// JavaScript (2026-11-10) a payday's scene takes 180 to 820 ms, and the whole army stepped
+// back by that much at every payday (the user, 2026-11-11: «всё дергается на каждом payday»).
+let coreMs = 0
+// The next payday's scene, asked before the one on screen ends, by the view it follows.
+let ready: { id: number; answer: Answer & Partial<Art> } | null = null
 let rowTimers: Timer[] = []
 let beat: Timer | null = null
 let unlit: Timer | null = null
@@ -342,11 +352,14 @@ async function setLang($: EngineInterface, code: string): Promise<void> {
 }
 
 // One request to the game. elapsed is how far the running scene has come.
-async function ask($: EngineInterface, op: string, arg = ''): Promise<Answer & Partial<Art>> {
+async function ask($: EngineInterface, op: string, arg = '', until?: number): Promise<Answer & Partial<Art>> {
   const v = await read($, view)
-  const elapsed = Math.min(v.steps, Math.max(0, Math.round(((await $.clock.now()) - v.at) / STEP_MS)))
+  const asked = await $.clock.now()
+  const elapsed = until ?? Math.min(v.steps, Math.max(0, Math.round((asked - v.at + coreMs) / STEP_MS)))
   const input = JSON.stringify({ op, arg, state: await read($, state), elapsed, seed: Math.floor(await $.clock.now()) % 4294967296, lang: await langOf($), level: await levelOf($), hints: await hintsOf($), ...front(), ...(await read($, progress)) })
   const reply = JSON.parse(await runCore($, input)) as Answer & Partial<Art> & { error?: string }
+  const took = (await $.clock.now()) - asked
+  coreMs = coreMs > 0 ? 0.7 * coreMs + 0.3 * took : took
   if (reply.error) {
     throw new Error(`the game stopped: ${reply.error.slice(0, 160)}`)
   }
@@ -502,12 +515,29 @@ async function show($: EngineInterface, a: Answer): Promise<void> {
     rowTimers.push($.clock.after(lead + a.fellAt * STEP_MS + FALL_MS, () => void act($, 'fall')))
   } else if (next.roll > 0 || (a.screen === 'battle' && steps > 0)) {
     timer = $.clock.after(lead + (steps + next.roll) * STEP_MS, () => void serial($, ended))
+    if (next.roll === 0) {
+      rowTimers.push($.clock.after(Math.max(0, lead + steps * STEP_MS - EARLY_MS), () => void serial($, early)))
+    }
   }
   await persist($)
 
+  async function isGoingOn(): Promise<boolean> {
+    return isShown && !isTurnOver && !(await read($, isFolded)) && (await read($, view)).id === next.id
+  }
+
+  // The payday's scene, asked while this one still runs: shown as it ends, it starts where
+  // this one stands then, with no wait for the core.
+  async function early(): Promise<void> {
+    if (await isGoingOn()) {
+      ready = { id: next.id, answer: await ask($, 'next', '', steps) }
+    }
+  }
+
   async function ended(): Promise<void> {
-    if (isShown && !isTurnOver && !(await read($, isFolded)) && (await read($, view)).id === next.id) {
-      await show($, await ask($, 'next'))
+    const got = ready?.id === next.id ? ready.answer : null
+    ready = null
+    if (await isGoingOn()) {
+      await show($, got ?? (await ask($, 'next')))
     } else {
       isRunning = false
     }
