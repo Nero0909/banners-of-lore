@@ -25,6 +25,8 @@ const ROWS = 2.4
 // Where a bay's upgrade plate starts along it, and the row it stands on.
 const UP_FROM = 0.55
 const UP_ROW = 1
+// Where the portrait ends along a bay: its 5% margin and a quarter of the rest.
+const PORTRAIT_TO = 0.05 + 0.92 * 0.25
 const FLASH_MS = 220
 const TICK_MS = 250
 // The bar to a pack's exit, faded as the count, on a dark track, a sixth of a row tall.
@@ -83,7 +85,10 @@ const HireClick: ClientModule<HireProps, Lit> = (props, surface) => {
       const along = ((x + 0.5) / Math.max(1, surface.columns || now.columns)) * 5
       const bay = Math.min(4, Math.floor(along))
       const hasUp = Boolean(now.bays[bay]?.up) && along - bay >= UP_FROM && y >= UP_ROW
-      return now.bays[bay] ? `${bay}:${hasUp ? 'up' : 'hire'}` : ''
+      // The portrait opens the line's card, where it sets what it waits for (Castle Fight's
+      // sync, 2026-11-12); a line not yet hired has none to open.
+      const isCard = along - bay < PORTRAIT_TO && (now.bays[bay]?.count ?? 0) > 0
+      return now.bays[bay] ? `${bay}:${isCard ? 'card' : hasUp ? 'up' : 'hire'}` : ''
     }
     const set = (change: Partial<Lit>) => {
       const was = surface.state ?? lit
@@ -103,7 +108,7 @@ const HireClick: ClientModule<HireProps, Lit> = (props, surface) => {
         const spot = spotAt(e.x, e.y)
         const [bay = '', kind] = spot.split(':')
         if (spot) {
-          surface.post({ bay: Number(bay), isUp: kind === 'up' })
+          surface.post({ bay: Number(bay), isUp: kind === 'up', isCard: kind === 'card' })
         }
         set({ held: '', flash: spot })
       }

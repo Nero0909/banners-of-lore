@@ -48,7 +48,7 @@ On your first run the title offers a short lesson from the learned cat. The game
 
 ### 1. Draft your army
 
-Pick your lines by hand, or let the reels deal them for +50 gold. Each side has 18 lines: tanks, mages, archers, supports and epics. The orcs draft too, and you see their choice before the fight.
+Pick your lines by hand, or let the reels deal them for +50 gold. Each side has 19 lines: tanks, mages, archers, supports and epics. The orcs draft too, and you see their choice before the fight.
 
 <p align="center">
   <img src="media/draft.png" alt="Your choice: seven Slavic lines dealt by the reels" width="1000">
@@ -57,7 +57,7 @@ Pick your lines by hand, or let the reels deal them for +50 gold. Each side has 
 
 ### 2. Hire and upgrade
 
-Gold comes every payday, once in 20 seconds. Each hire lifts the next payday, so gold kept in store earns nothing. You open five places on the field from your reserve, then hire more packs into each line and upgrade it to its stronger form.
+Gold comes every payday, once in 20 seconds. Each hire lifts the next payday, so gold kept in store earns nothing. You open five places on the field from your reserve, then hire more packs into each line and upgrade it to its stronger form. A line that no longer helps can be sold from its card for 80% of all the gold put into it.
 
 <p align="center">
   <img src="media/reserve.png" alt="The reserve: cards of the lines you can place, with price, attack, armour and ability" width="1000">

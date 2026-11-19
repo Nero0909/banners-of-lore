@@ -460,6 +460,7 @@ async function show($: EngineInterface, a: Answer): Promise<void> {
     zones: a.zones ?? [],
     offer: a.offer ?? [],
     base: a.base ?? NO_BASE,
+    mirror: a.mirror === true,
   }
   const layers = a.layers ?? []
   pictures.set(next.id, { layers, alt: next.alt })
@@ -557,6 +558,17 @@ function press($: EngineInterface, key: string): Promise<void> {
   return act($, op, arg)
 }
 
+// The backdrop in a mirror, for a battle the core draws so (a player of the right side stands on
+// the left, 2026-11-12): its picture inside one turned group, the field's 1000 wide.
+export function backdropOf(svg: string, mirror: boolean): string {
+  if (!mirror) {
+    return svg
+  }
+  const open = svg.indexOf('>', svg.indexOf('<svg')) + 1
+  const close = svg.lastIndexOf('</svg>')
+  return open <= 0 || close < open ? svg : `${svg.slice(0, open)}<g transform="matrix(-1 0 0 1 1000 0)">${svg.slice(open, close)}</g>${svg.slice(close)}`
+}
+
 export function isLate(v: { at: number; steps: number; roll: number }, now: number): boolean {
   return now - v.at - (v.steps + v.roll) * STEP_MS > LATE_MS
 }
@@ -617,15 +629,15 @@ export function spentRow(tokens: number, mana: number): string {
 
 // Lights the row with what Claude just did and what that paid: a dim line that
 // stayed was not seen, and a sum with no cause said nothing (seen 2026-10-31). What
-// it set the orcs up with is said when it grows, not again at every payday.
+// it set the AI up with is said when it grows, not again at every payday.
 async function light($: EngineInterface, why: string, grew: 'fury' | 'totem' | '' = ''): Promise<void> {
   const base = (await read($, view)).base
   const w = await read($, progress)
   const threat =
     grew === 'fury'
-      ? say('enraged', 'ORCS ENRAGED x{n}', { n: base.fury + w.errors - base.usedErrors })
+      ? say('enraged', '{foe} ENRAGED x{n}', { foe: base.foe ?? 'ORCS', n: base.fury + w.errors - base.usedErrors })
       : grew === 'totem'
-        ? say('totem', 'ORC TOTEM x{n}', { n: base.totems + w.compactions - base.usedCompactions })
+        ? say('totem', 'STUN x{n}', { n: base.totems + w.compactions - base.usedCompactions })
         : ''
   isNewsLast = false
   litCount += 1
@@ -721,8 +733,12 @@ async function wake($: EngineInterface): Promise<void> {
   if (v.screen === 'settings' && !pictures.has(v.id)) {
     await show($, await ask($, 'settings'))
   }
-  if (v.screen === 'mode' && !pictures.has(v.id)) {
+  if (v.screen === 'race' && !pictures.has(v.id)) {
     await show($, await ask($, 'new'))
+  }
+  // The draft's choice comes after the race's: asked with no race, the core shows it again.
+  if (v.screen === 'mode' && !pictures.has(v.id)) {
+    await show($, await ask($, 'race'))
   }
   if (v.screen === 'spin' && !pictures.has(v.id)) {
     await show($, await ask($, 'spin'))
@@ -739,7 +755,7 @@ export const register: Register = on => {
     const dev = await devBuild($)
     await serial($, () => wake($))
     if (dev) {
-      await $.command.register({ name: COMMAND, description: say('command', '"lang" picks the language, "lesson" plays the lesson, "test" fields one of each line, "card" plays the next card of the deck, "victory" and "defeated" show how a match ends') })
+      await $.command.register({ name: COMMAND, description: say('command', '"lang" picks the language, "lesson" plays the tutorial, "test" fields one of each line, "card" plays the next card of the deck, "victory" and "defeated" show how a match ends') })
     }
     beat?.cancel()
     beat = $.clock.every(BEAT_MS, () => void look($))
@@ -919,9 +935,17 @@ export const register: Register = on => {
     }
     // A bay of the hire bar: its upgrade's corner, or the hire. Nothing while the die rolls.
     if (e.element === 'hire-click') {
-      const { bay, isUp } = e.data as { bay: number; isUp: boolean }
+      const { bay, isUp, isCard } = e.data as { bay: number; isUp: boolean; isCard?: boolean }
       const { hire, forms } = await read($, buttons)
       const hired = hire[bay]
+      // A portrait: the line's card, where it chooses what it waits for.
+      if (isCard) {
+        const id = hired?.key.startsWith('hire:') ? hired.key.slice(5) : ''
+        if (v.screen === 'battle' && id) {
+          await act($, 'line', id)
+        }
+        return {}
+      }
       const choice = isUp ? forms.find(f => f.key.split(':')[1] === hired?.key.split(':')[1]) : hired
       // The free place again, over its own choice: back to the battle.
       if (v.screen === 'dice' && choice?.key === 'slot') {
@@ -941,11 +965,19 @@ export const register: Register = on => {
       return {}
     }
     // Read or not, a click on the die's turn goes back to the battle. Over a free place's
-    // choice a card opens its line, and a click beside them goes back the same.
+    // choice a card opens its line, and a click beside them goes back the same. On a line's
+    // card its plates choose what it waits for, and the sale's asks to be sure, then sells.
     if (e.element === 'roll-click') {
       if (v.screen === 'dice') {
         const { key = '' } = (e.data ?? {}) as { key?: string }
-        await (key.startsWith('take:') ? press($, key) : act($, 'next'))
+        await (/^(take|link|sell|sold):/.test(key) ? press($, key) : act($, 'next'))
+      }
+      return {}
+    }
+    // A half of the field: the race that stands on that side.
+    if (e.element === 'race-click') {
+      if (v.screen === 'race') {
+        await act($, 'race', String(Number((e.data as { card?: number }).card) === 0 ? 0 : 1))
       }
       return {}
     }
@@ -1020,7 +1052,7 @@ export const register: Register = on => {
       const v = await read($, view)
       // After a reload the pictures take a moment to come, and one empty Svg would
       // fail the whole hook (seen 2026-10-31).
-      if (desk && (!art || ((v.screen === 'draft' || v.screen === 'over' || v.screen === 'mode' || v.screen === 'spin' || v.screen === 'settings') && !pictures.has(v.id)))) {
+      if (desk && (!art || ((v.screen === 'draft' || v.screen === 'over' || v.screen === 'race' || v.screen === 'mode' || v.screen === 'spin' || v.screen === 'settings') && !pictures.has(v.id)))) {
         return next(e)
       }
       const rows = Math.min(ROWS, Math.max(4, e.props.maxRows - 2))
@@ -1073,7 +1105,7 @@ export const register: Register = on => {
         desk ? (
           <Box position="relative" flexDirection="column" width="100%">
             <Box key="backdrop" flexDirection="column" width="100%">
-              <desk.Svg source={art?.backdrop ?? ''} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
+              <desk.Svg source={backdropOf(art?.backdrop ?? '', v.mirror === true)} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
             </Box>
             <Box key={key} position="absolute" top={0} left={0} flexDirection="column" width="100%">
               <desk.Svg source={source} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
@@ -1183,6 +1215,33 @@ export const register: Register = on => {
           </Box>
         )
       }
+      if (v.screen === 'race') {
+        const row = (
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            <Button key="slavs" label={say('slavs', 'Slavs')} variant="primary" onPress={() => void act($, 'race', 'slavs')} />
+            <Button key="orcs" label={say('orcs', 'Orcs')} variant="primary" onPress={() => void act($, 'race', 'orcs')} />
+          </Box>
+        )
+        if (desk) {
+          return (
+            <Box flexDirection="column" width={e.props.bodyColumns}>
+              <Box flexDirection="column" alignSelf="center">
+              {topRow(blank)}
+              {field('race', pictures.get(v.id)?.layers[0] ?? '', <desk.Client key="race-click" module="./draft-client.tsx" props={{ ...size, cards: 2 } satisfies DraftProps} width="100%" height={rows} />)}
+              </Box>
+            </Box>
+          )
+        }
+        return (
+          <Box flexDirection="column" width={e.props.bodyColumns}>
+            {topRow(blank)}
+            <Text bold color="#F4BD60">
+              {v.short}
+            </Text>
+            {row}
+          </Box>
+        )
+      }
       if (v.screen === 'mode') {
         const row = (
           <Box flexDirection="row" alignItems="center" gap={1}>
@@ -1226,7 +1285,7 @@ export const register: Register = on => {
               {topRow(blank)}
               <Box position="relative" flexDirection="column" width="100%">
                 <Box key="backdrop" flexDirection="column" width="100%">
-                  <desk.Svg source={art?.backdrop ?? ''} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
+                  <desk.Svg source={backdropOf(art?.backdrop ?? '', v.mirror === true)} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
                 </Box>
                 <Box key="wall" position="absolute" top={0} left={0} flexDirection="column" width="100%">
                   <desk.Svg source={shown?.layers[0] ?? ''} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
@@ -1383,7 +1442,7 @@ export const register: Register = on => {
             )}
             <Box position="relative" flexDirection="column" width="100%">
               <Box key="backdrop" flexDirection="column" width="100%">
-                <desk.Svg source={art?.backdrop ?? ''} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
+                <desk.Svg source={backdropOf(art?.backdrop ?? '', v.mirror === true)} alt={NO_TIP} width={FIELD_PX.width} height={FIELD_PX.height} />
               </Box>
               {flat('stand-0', still?.layers[0])}
               {flat('stand-1', still?.layers[1])}

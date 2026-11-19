@@ -15,7 +15,8 @@ export type Row = { at: number; buttons: { hire: Choice[]; forms: Choice[] }; ne
 export type Offer = { key: string; label: string; text: string }
 
 // What the core counts Claude's work against, to say what it comes to.
-export type Base = { fury: number; totems: number; usedErrors: number; usedCompactions: number }
+// foe names the AI's race, as the news does: ORCS to a player of the slavs.
+export type Base = { fury: number; totems: number; usedErrors: number; usedCompactions: number; foe?: string }
 
 // What the row over the field says.
 export type Flash = { said: string; threat: string; grew?: 'fury' | 'totem' | '' }
@@ -27,7 +28,7 @@ export type Zone = { key: string; left: number; right: number; top: number; bott
 // What the core answers: a toast alone, or a screen.
 export type Answer = {
   toast?: string
-  screen?: 'title' | 'settings' | 'mode' | 'draft' | 'spin' | 'over' | 'battle' | 'dice'
+  screen?: 'title' | 'settings' | 'race' | 'mode' | 'draft' | 'spin' | 'over' | 'battle' | 'dice'
   // The plates of the title and the settings, where they stand.
   zones?: Zone[]
   state?: string
@@ -58,6 +59,8 @@ export type Answer = {
   offer?: Offer[]
   canContinue?: boolean
   base?: Base
+  // The battle seen in a mirror, a player of the right side on the left: the backdrop turns too.
+  mirror?: boolean
 }
 
 // The pictures that never change and how Claude's tokens turn into work.
@@ -69,7 +72,7 @@ export type Picture = { layers: string[]; alt: string }
 // What the band shows now. at is the clock time its scene began.
 export type View = {
   id: number
-  screen: 'title' | 'settings' | 'mode' | 'draft' | 'spin' | 'over' | 'battle' | 'dice'
+  screen: 'title' | 'settings' | 'race' | 'mode' | 'draft' | 'spin' | 'over' | 'battle' | 'dice'
   zones: Zone[]
   steps: number
   roll: number
@@ -81,6 +84,7 @@ export type View = {
   canContinue: boolean
   offer: Offer[]
   base: Base
+  mirror?: boolean
 }
 
 // Claude's work so far, as running totals.
